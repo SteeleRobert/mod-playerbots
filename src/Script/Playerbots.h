@@ -11,6 +11,7 @@
 #include "Group.h"
 #include "Pet.h"
 #include "PlayerbotAI.h"
+#include "PlayerbotLongTermAI.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotMgr.h"
 #include "RandomPlayerbotMgr.h"
@@ -29,6 +30,7 @@ int strcmpi(char const* s1, char const* s2);
 #define EMOTE_ANGLE_IN_FRONT (2.f * static_cast<float>(M_PI) / 6.f)
 
 #define GET_PLAYERBOT_AI(object) sPlayerbotsMgr.GetPlayerbotAI(object)
+#define GET_PLAYERBOT_LONG_TERM_AI(object) sPlayerbotsMgr.GetPlayerbotLongTermAI(object)
 #define GET_PLAYERBOT_MGR(object) sPlayerbotsMgr.GetPlayerbotMgr(object)
 
 #define AI_VALUE(type, name) context->GetValue<type>(name)->Get()

@@ -18,6 +18,7 @@
 #include "ObjectMgr.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotFactory.h"
+#include "PlayerbotLongTermAI.h"
 #include "PlayerbotGuildMgr.h"
 #include "PlayerbotOperations.h"
 #include "PlayerbotRepository.h"
@@ -434,7 +435,9 @@ void PlayerbotHolder::DisablePlayerBot(ObjectGuid guid)
 
         RemoveFromPlayerbotsMap(guid);  // deletes bot player ptr inside this WorldSession PlayerBotMap
 
+        delete GET_PLAYERBOT_LONG_TERM_AI(bot);
         delete botAI;
+        delete GET_PLAYERBOT_MGR(bot);
     }
 }
 
@@ -1752,10 +1755,18 @@ void PlayerbotsMgr::AddPlayerbotData(Player* player, bool isBotAI)
         std::unordered_map<ObjectGuid, PlayerbotAIBase*>::iterator itr = _playerbotsAIMap.find(player->GetGUID());
         if (itr != _playerbotsAIMap.end())
         {
-            _playerbotsAIMap.erase(itr);
+            delete itr->second;
         }
         PlayerbotAI* botAI = new PlayerbotAI(player);
         ASSERT(_playerbotsAIMap.emplace(player->GetGUID(), botAI).second);
+
+        std::unordered_map<ObjectGuid, PlayerbotLongTermAI*>::iterator itrLongTerm = _playerbotsLongTermAIMap.find(player->GetGUID());
+        if (itrLongTerm != _playerbotsLongTermAIMap.end())
+        {
+            delete itrLongTerm->second;
+        }
+        PlayerbotLongTermAI* longTermAI = new PlayerbotLongTermAI(player);
+        ASSERT(_playerbotsLongTermAIMap.emplace(player->GetGUID(), longTermAI).second);
     }
 }
 
@@ -1768,6 +1779,11 @@ void PlayerbotsMgr::RemovePlayerBotData(ObjectGuid const& guid, bool is_AI)
         {
             _playerbotsAIMap.erase(itr);
         }
+        std::unordered_map<ObjectGuid, PlayerbotLongTermAI*>::iterator itrLongTerm = _playerbotsLongTermAIMap.find(guid);
+        if (itrLongTerm != _playerbotsLongTermAIMap.end())
+        {
+            _playerbotsLongTermAIMap.erase(itrLongTerm);
+        }
     }
     else
     {
@@ -1776,6 +1792,24 @@ void PlayerbotsMgr::RemovePlayerBotData(ObjectGuid const& guid, bool is_AI)
         {
             _playerbotsMgrMap.erase(itr);
         }
+    }
+}
+
+void PlayerbotsMgr::RemovePlayerbotAI(ObjectGuid const& guid)
+{
+    std::unordered_map<ObjectGuid, PlayerbotAIBase*>::iterator itr = _playerbotsAIMap.find(guid);
+    if (itr != _playerbotsAIMap.end())
+    {
+        _playerbotsAIMap.erase(itr);
+    }
+}
+
+void PlayerbotsMgr::RemovePlayerbotLongTermAI(ObjectGuid const& guid)
+{
+    std::unordered_map<ObjectGuid, PlayerbotLongTermAI*>::iterator itrLongTerm = _playerbotsLongTermAIMap.find(guid);
+    if (itrLongTerm != _playerbotsLongTermAIMap.end())
+    {
+        _playerbotsLongTermAIMap.erase(itrLongTerm);
     }
 }
 
@@ -1794,6 +1828,21 @@ PlayerbotAI* PlayerbotsMgr::GetPlayerbotAI(Player* player)
     {
         if (itr->second->IsBotAI())
             return dynamic_cast<PlayerbotAI*>(itr->second);
+    }
+
+    return nullptr;
+}
+
+PlayerbotLongTermAI* PlayerbotsMgr::GetPlayerbotLongTermAI(Player* player)
+{
+    if (!(sPlayerbotAIConfig.enabled) || !player)
+    {
+        return nullptr;
+    }
+    auto itr = _playerbotsLongTermAIMap.find(player->GetGUID());
+    if (itr != _playerbotsLongTermAIMap.end())
+    {
+        return itr->second;
     }
 
     return nullptr;

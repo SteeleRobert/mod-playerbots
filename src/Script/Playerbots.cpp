@@ -155,6 +155,13 @@ public:
 
     void OnPlayerAfterUpdate(Player* player, uint32 diff) override
     {
+        PlayerbotLongTermAI* const longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(player);
+
+        if (longTermAI != nullptr)
+        {
+            longTermAI->UpdateAI(diff);
+        }
+
         PlayerbotAI* const botAI = PlayerbotsMgr::instance().GetPlayerbotAI(player);
 
         if (botAI != nullptr)
@@ -183,6 +190,14 @@ public:
         }
 
         botAI->HandleCommand(type, msg, player);
+
+        // Temporary handling of "decide" command for long-term AI module
+        if (msg == "decide")
+        {
+            PlayerbotLongTermAI* const longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(receiver);
+            if (longTermAI != nullptr)
+                longTermAI->Decide();
+        }
 
         // hotfix; otherwise the server will crash when whispering logout
         // https://github.com/mod-playerbots/mod-playerbots/pull/1838
@@ -299,6 +314,10 @@ public:
     void OnDestructPlayer(Player* player) override
     {
         PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(player);
+        PlayerbotLongTermAI* longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(player);
+
+        if (longTermAI != nullptr)
+            delete longTermAI;
 
         if (botAI != nullptr)
             delete botAI;

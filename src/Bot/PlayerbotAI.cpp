@@ -239,7 +239,7 @@ PlayerbotAI::~PlayerbotAI()
         delete aiObjectContext;
 
     if (bot)
-        PlayerbotsMgr::instance().RemovePlayerBotData(bot->GetGUID(), true);
+        PlayerbotsMgr::instance().RemovePlayerbotAI(bot->GetGUID());
 }
 
 void PlayerbotAI::UpdateAI(uint32 elapsed, bool minimal)
