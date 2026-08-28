@@ -3,6 +3,8 @@
 
 #include "PlayerbotAI.h"
 #include "FunctionTool.h"
+#include "LongTerm/LlmClient.h"
+#include "LongTerm/LlmDirective.h"
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
@@ -18,6 +20,24 @@ private:
     std::unordered_map<std::string, std::unique_ptr<FunctionTool>> tools;
 };
 
+/*
+ * The slow half of a two-speed brain.
+ *
+ * PlayerbotAI ticks every ~100 ms and owns every second-to-second decision. This
+ * class runs on the same update hook but acts roughly once every five minutes, and
+ * all it ever produces is a single LlmDirective: an *intent* ("quest", "grind",
+ * "travel to Westfall", "go turn things in", "go to a town"). It never moves the
+ * bot, never picks a target and never touches the action queue.
+ *
+ * The directive is consumed by the classical New RPG state machine, which gets
+ * first refusal on the status roll (NewRpgBaseAction::RandomChangeStatus). If the
+ * directive cannot be honoured - no quest with POI data, no flight path, endpoint
+ * down, reply unparseable - the classical roll runs exactly as it always has. The
+ * LLM is never in the critical path, and it is never allowed to freeze a bot.
+ *
+ * Everything here is inert unless AiPlayerbot.LlmDirective.Enabled is set AND the
+ * individual bot is opted in, so the A/B baseline keeps its original code path.
+ */
 class PlayerbotLongTermAI
 {
 public:
@@ -28,12 +48,62 @@ public:
     void UpdateAI(uint32 elapsed, bool minimal = false);
     void Decide();
 
+    // --- consumed by the classical engine (New RPG) ---------------------------
+
+    // True when the feature is on and this bot is one of the opted-in ones.
+    bool IsDirectiveLayerActive();
+
+    // RPG statuses to try, in order, before falling back to the normal weighted
+    // roll. Empty whenever there is nothing to say, which is the common case.
+    std::vector<NewRpgStatus> GetPreferredRpgStatuses();
+
+    LlmDirective const& GetDirective() const { return _directive; }
+
+    // Zone the current directive wants the bot in, or 0.
+    uint32 GetDirectiveZoneId() const;
+
+    // "turnin" asks the quest picker to prefer quests that are already complete.
+    bool PrefersCompletedQuests() const;
+
+    // The engine took the directive up; recorded so the next prompt can say
+    // whether the intent ever actually reached the world.
+    void NoteDirectiveApplied(NewRpgStatus status);
+
 protected:
     Player* bot;
     FunctionToolRegistry functionToolRegistry;
 
 private:
+    bool ComputeOptIn() const;
+    void RequestDecision(uint32 now);
+    void ConsumeReply(LlmReply const& reply);
+    void CheckDirectiveCompletion();
+    std::string SummariseDirectiveOutcome() const;
+    void RetireDirective(std::string const& outcome);
+
     uint32 _timeLastUpdate;
+
+    // -1 not yet computed, 0 no, 1 yes. Recomputed only on a config reload, which
+    // bumps _optInGeneration.
+    int8 _optIn{-1};
+
+    uint32 _nextDecisionMs{0};
+    bool _pending{false};
+    std::string _pendingPrompt;
+    std::vector<LlmZoneChoice> _pendingZones;
+
+    LlmDirective _directive;
+    uint32 _directiveApplyCount{0};
+
+    // State snapshot taken when a directive is issued, so its outcome can be
+    // described in concrete terms rather than "it ran".
+    uint32 _atIssueQuestRewarded{0};
+    uint32 _atIssueQuestAccepted{0};
+    uint32 _atIssueLevel{0};
+    uint32 _atIssueZoneId{0};
+
+    uint32 _deathsSinceLastDecision{0};
+    bool _wasDead{false};
 };
 
 #endif
