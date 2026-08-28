@@ -94,6 +94,10 @@ private:
 
     LlmDirective _directive;
     uint32 _directiveApplyCount{0};
+    // The bot was already in a status the directive asked for, so the engine had
+    // no re-roll to make. That is the directive being honoured, not ignored - the
+    // apply counter alone reported those as "never took it up".
+    bool _directiveAligned{false};
 
     // State snapshot taken when a directive is issued, so its outcome can be
     // described in concrete terms rather than "it ran".

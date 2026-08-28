@@ -127,6 +127,12 @@ std::vector<NewRpgStatus> PlayerbotLongTermAI::GetPreferredRpgStatuses()
         case LlmDirectiveAction::QUEST:
         case LlmDirectiveAction::TURNIN:
             preferred.push_back(RPG_DO_QUEST);
+            // DO_QUEST needs a quest in the log with usable POI data. A bot with an
+            // empty log cannot satisfy "quest" that way, and the model says so itself
+            // ("No quests active; need to accept new ones"). Visiting nearby NPCs is
+            // how this engine acquires and hands in quests, so it is the honest
+            // second choice rather than dropping to an unrelated random roll.
+            preferred.push_back(RPG_WANDER_NPC);
             break;
         case LlmDirectiveAction::GRIND:
             preferred.push_back(RPG_GO_GRIND);
@@ -137,6 +143,7 @@ std::vector<NewRpgStatus> PlayerbotLongTermAI::GetPreferredRpgStatuses()
             // execution is "go stand in a town hub", which is where the vendors,
             // repair NPCs and quest givers all are.
             preferred.push_back(RPG_GO_CAMP);
+            preferred.push_back(RPG_WANDER_NPC);
             break;
         case LlmDirectiveAction::TRAVEL:
             break;  // already pushed above
@@ -180,6 +187,20 @@ void PlayerbotLongTermAI::UpdateAI(uint32 /*elapsed*/, bool /*minimal*/)
     }
 
     CheckDirectiveCompletion();
+
+    // A directive whose status the bot is already in is being followed, even though
+    // no status roll ever happened. Record that, or the outcome fed back to the
+    // model reads "the engine never took it up" while the bot does exactly as told.
+    if (_directive.IsActive() && !_directiveAligned)
+    {
+        if (PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot))
+        {
+            NewRpgStatus const current = botAI->rpgInfo.GetStatus();
+            std::vector<NewRpgStatus> const preferred = GetPreferredRpgStatuses();
+            if (std::find(preferred.begin(), preferred.end(), current) != preferred.end())
+                _directiveAligned = true;
+        }
+    }
 
     if (_nextDecisionMs == 0)
     {
@@ -284,6 +305,7 @@ void PlayerbotLongTermAI::ConsumeReply(LlmReply const& reply)
 
         _directive = parsed;
         _directiveApplyCount = 0;
+        _directiveAligned = false;
         _atIssueQuestRewarded = 0;
         _atIssueQuestAccepted = 0;
         _atIssueLevel = bot->GetLevel();
@@ -331,6 +353,7 @@ void PlayerbotLongTermAI::ConsumeReply(LlmReply const& reply)
     {
         _directive = LlmDirective();
         _directiveApplyCount = 0;
+        _directiveAligned = false;
 
         LOG_WARN("playerbots", "[LlmDirective] {} rejected reply ({} chars, {}ms): {}", bot->GetName(),
                  record.replyChars, reply.latencyMs, LogSafe(error));
@@ -393,10 +416,12 @@ std::string PlayerbotLongTermAI::SummariseDirectiveOutcome() const
 {
     std::ostringstream out;
 
-    if (!_directiveApplyCount)
-        out << "the engine never took it up";
-    else
+    if (_directiveApplyCount)
         out << "acted on it " << _directiveApplyCount << "x";
+    else if (_directiveAligned)
+        out << "you were already doing this";
+    else
+        out << "the engine never took it up";
 
     if (PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot))
     {
