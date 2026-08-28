@@ -391,6 +391,26 @@ public:
     bool autoLearnTrainerSpells;
     bool autoDoQuests;
     bool enableNewRpgStrategy;
+
+    // Slow (LLM) strategic layer. One prompt per opted-in bot every few minutes
+    // decides *intent* (quest / grind / travel / turn in / vendor); the classical
+    // engine still runs every tick. Off by default: with llmDirectiveEnabled = 0
+    // no bot allocates, calls or branches differently anywhere.
+    bool llmDirectiveEnabled;
+    std::vector<std::string> llmDirectiveBotNames;
+    uint32 llmDirectiveRandomBotPercent;
+    uint32 llmDirectiveIntervalSeconds;
+    uint32 llmDirectiveJitterSeconds;
+    std::string llmDirectiveUrl;
+    std::string llmDirectiveModel;
+    uint32 llmDirectiveNumPredict;
+    float llmDirectiveTemperature;
+    uint32 llmDirectiveTimeoutSeconds;
+    uint32 llmDirectiveMaxConcurrent;
+    uint32 llmDirectiveHistorySize;
+    bool llmDirectiveJournal;
+    bool llmDirectiveJournalAutoCreate;
+    bool llmDirectiveDebug;
     std::unordered_map<NewRpgStatus, uint32> RpgStatusProbWeight;
     bool syncLevelWithPlayers;
     bool autoLearnQuestSpells;

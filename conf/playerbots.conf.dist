@@ -1417,6 +1417,102 @@ AiPlayerbot.RpgStatusProbWeight.TravelFlight = 15
 AiPlayerbot.RpgStatusProbWeight.Rest = 5
 AiPlayerbot.RpgStatusProbWeight.OutdoorPvp = 10
 
+###################################################################################################
+# SLOW (LLM) STRATEGIC LAYER
+#
+# An opt-in second brain that runs about once every five minutes per bot and emits
+# ONE strategic intent: quest / grind / travel / turnin / vendor, optionally naming
+# a zone. Everything second-to-second - combat rotations, pathing, looting,
+# targeting, talking to NPCs - stays with the classical playerbot AI, which is what
+# actually executes the intent (the New RPG state machine gets the directive as a
+# first-refusal on its status roll).
+#
+# The LLM is never in the per-tick loop and never blocks the world thread: calls run
+# on detached worker threads and the reply is applied on a later tick. If the
+# endpoint is slow, down, or answers with something unparseable, the bot simply
+# behaves like a normal classical bot until the next decision.
+#
+# With Enabled = 0 (the default) no bot allocates, calls, or branches differently
+# anywhere - which is what makes an A/B comparison against classical bots valid.
+###################################################################################################
+
+# Master switch for the slow strategic layer.
+# Default: 0 (disabled)
+AiPlayerbot.LlmDirective.Enabled = 0
+
+# Comma-separated bot names that are ALWAYS driven by the slow layer. These need not
+# be random bots.
+# Default: "" (none)
+AiPlayerbot.LlmDirective.BotNames = ""
+
+# Additionally opt in this percentage of RANDOM bots, chosen deterministically from
+# the character GUID so the same bots stay in the same arm of an A/B run across
+# restarts. 0 disables. 100 puts every random bot under the slow layer.
+# Default: 0
+AiPlayerbot.LlmDirective.RandomBotPercent = 0
+
+# Seconds between decisions for one bot. Each bot's first decision is spread
+# randomly across one full interval, and every subsequent one adds JitterSeconds of
+# random spread, so fifty bots do not all fire in the same tick. Minimum 30.
+# Default: 300 (five minutes)
+AiPlayerbot.LlmDirective.IntervalSeconds = 300
+
+# Extra random spread added after each decision, in seconds.
+# Default: 60
+AiPlayerbot.LlmDirective.JitterSeconds = 60
+
+# Ollama-compatible generate endpoint. Must be reachable from the worldserver host.
+# On this deployment an Ollama-compatible shim listens on :11434.
+# Default: http://127.0.0.1:11434/api/generate
+AiPlayerbot.LlmDirective.Url = "http://127.0.0.1:11434/api/generate"
+
+# Model name passed to the endpoint.
+# Default: llama3.1:8b
+AiPlayerbot.LlmDirective.Model = "llama3.1:8b"
+
+# Token cap for the reply. DO NOT shrink this without first checking the
+# reply_chars column of playerbots_llm_directive_journal: a cap that truncates the
+# JSON looks exactly like a parse bug from the outside. A sibling feature shipped
+# with 128 and lost 97% of its replies that way. Minimum 64.
+# Default: 512
+AiPlayerbot.LlmDirective.NumPredict = 512
+
+# Sampling temperature. This is a classification task; keep it low.
+# Default: 0.2
+AiPlayerbot.LlmDirective.Temperature = 0.2
+
+# Per-request HTTP timeout, seconds. A timed-out call is a failure: the bot falls
+# back to classical behaviour and the failure is journalled.
+# Default: 60
+AiPlayerbot.LlmDirective.TimeoutSeconds = 60
+
+# Maximum simultaneous in-flight requests across ALL bots. At one call per bot per
+# five minutes, fifty bots produce ~10 calls/minute, so this only matters when the
+# endpoint is slow. 0 = unlimited.
+# Default: 8
+AiPlayerbot.LlmDirective.MaxConcurrent = 8
+
+# How many previous decisions (with their real outcomes) are shown back to the model
+# so it can course-correct. Capped at 12.
+# Default: 5
+AiPlayerbot.LlmDirective.HistorySize = 5
+
+# Write every call - prompt, raw reply, latency, parse outcome, model - to
+# playerbots_llm_directive_journal in the playerbots database. Leave this on: it is
+# the only way to tell a truncated reply from a bad one.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.Journal = 1
+
+# Issue CREATE TABLE IF NOT EXISTS for the journal table on first use. The same DDL
+# also ships as data/sql/playerbots/updates/*.sql; this covers servers whose SQL
+# updater is disabled.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.JournalAutoCreate = 1
+
+# Log every accepted directive at INFO level.
+# Default: 0 (disabled)
+AiPlayerbot.LlmDirective.Debug = 0
+
 # Bots' minimum and maximum level when teleporting in and out of a zone, according to the new RPG strategy
 # Format: AiPlayerbot.ZoneBracket.zoneID = minLevel,maxLevel
 #

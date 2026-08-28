@@ -727,6 +727,35 @@ bool PlayerbotAIConfig::Initialize()
     autoDoQuests = sConfigMgr->GetOption<bool>("AiPlayerbot.AutoDoQuests", true);
     enableNewRpgStrategy = sConfigMgr->GetOption<bool>("AiPlayerbot.EnableNewRpgStrategy", true);
 
+    // Slow (LLM) strategic layer - see conf for what each key does. Default OFF.
+    llmDirectiveEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.Enabled", false);
+    llmDirectiveBotNames.clear();
+    LoadListString<std::vector<std::string>>(
+        sConfigMgr->GetOption<std::string>("AiPlayerbot.LlmDirective.BotNames", ""), llmDirectiveBotNames);
+    llmDirectiveRandomBotPercent =
+        std::min<uint32>(100, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.RandomBotPercent", 0));
+    llmDirectiveIntervalSeconds =
+        std::max<uint32>(30, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.IntervalSeconds", 300));
+    llmDirectiveJitterSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.JitterSeconds", 60);
+    llmDirectiveUrl =
+        sConfigMgr->GetOption<std::string>("AiPlayerbot.LlmDirective.Url", "http://127.0.0.1:11434/api/generate");
+    llmDirectiveModel = sConfigMgr->GetOption<std::string>("AiPlayerbot.LlmDirective.Model", "llama3.1:8b");
+    // Sized to the reply we actually want, with headroom. Do not shrink this
+    // without checking reply_chars in the journal: a cap that truncates the JSON
+    // presents exactly like a parse bug.
+    llmDirectiveNumPredict =
+        std::max<uint32>(64, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.NumPredict", 512));
+    llmDirectiveTemperature = sConfigMgr->GetOption<float>("AiPlayerbot.LlmDirective.Temperature", 0.2f);
+    llmDirectiveTimeoutSeconds =
+        std::max<uint32>(1, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.TimeoutSeconds", 60));
+    llmDirectiveMaxConcurrent = sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.MaxConcurrent", 8);
+    llmDirectiveHistorySize =
+        std::min<uint32>(12, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.HistorySize", 5));
+    llmDirectiveJournal = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.Journal", true);
+    llmDirectiveJournalAutoCreate =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.JournalAutoCreate", true);
+    llmDirectiveDebug = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.Debug", false);
+
     RpgStatusProbWeight[RPG_WANDER_RANDOM] = sConfigMgr->GetOption<int32>("AiPlayerbot.RpgStatusProbWeight.WanderRandom", 15);
     RpgStatusProbWeight[RPG_WANDER_NPC] = sConfigMgr->GetOption<int32>("AiPlayerbot.RpgStatusProbWeight.WanderNpc", 20);
     RpgStatusProbWeight[RPG_GO_GRIND] = sConfigMgr->GetOption<int32>("AiPlayerbot.RpgStatusProbWeight.GoGrind", 15);
