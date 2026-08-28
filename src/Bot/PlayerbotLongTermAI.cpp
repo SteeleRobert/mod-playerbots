@@ -1,6 +1,7 @@
 #include "PlayerbotLongTermAI.h"
 #include "LongTerm/LlmJournal.h"
 #include "LongTerm/LlmPrompt.h"
+#include "LongTerm/LlmTelemetry.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotMgr.h"
 #include "RandomPlayerbotMgr.h"
@@ -172,8 +173,39 @@ void PlayerbotLongTermAI::UpdateAI(uint32 /*elapsed*/, bool /*minimal*/)
     // the state so a five-minute corpse run counts once.
     bool const dead = !bot->IsAlive();
     if (dead && !_wasDead)
+    {
         ++_deathsSinceLastDecision;
+        LlmTelemetry::RecordEvent(bot, LlmTelemetry::EVENT_DIED);
+    }
     _wasDead = dead;
+
+    // Level-ups and quest turn-ins, for the dashboard's counters and markers.
+    // Primed on the first tick so a fresh login does not report every quest the
+    // bot has ever handed in as having just happened.
+    if (PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot))
+    {
+        uint32 const level = bot->GetLevel();
+        uint32 const rewarded = botAI->rpgStatistic.questRewarded;
+
+        if (!_telemetryPrimed)
+        {
+            _telemetryLevel = level;
+            _telemetryQuestRewarded = rewarded;
+            _telemetryPrimed = true;
+        }
+        else
+        {
+            if (level > _telemetryLevel)
+            {
+                LlmTelemetry::RecordEvent(bot, LlmTelemetry::EVENT_LEVELED_UP,
+                                          "{\"level\":" + std::to_string(level) + "}");
+                _telemetryLevel = level;
+            }
+            for (uint32 i = _telemetryQuestRewarded; i < rewarded; ++i)
+                LlmTelemetry::RecordEvent(bot, LlmTelemetry::EVENT_QUEST_DONE);
+            _telemetryQuestRewarded = rewarded;
+        }
+    }
 
     uint32 const now = getMSTime();
 
@@ -365,6 +397,15 @@ void PlayerbotLongTermAI::ConsumeReply(LlmReply const& reply)
 
     if (sPlayerbotAIConfig.llmDirectiveJournal)
         LlmJournal::Write(record);
+
+    // Same decision, in the shape the dashboard already knows how to read.
+    LlmTelemetry::WriteDecision(bot,
+                                record.parseOk ? record.action : "rejected",
+                                record.chosenZone.empty() ? std::string("{}")
+                                                          : ("{\"zone\":\"" + record.chosenZone + "\"}"),
+                                record.reason, record.parseOk,
+                                record.parseOk ? record.prevOutcome : record.parseError,
+                                record.latencyMs, record.prompt, record.reply);
 }
 
 void PlayerbotLongTermAI::CheckDirectiveCompletion()

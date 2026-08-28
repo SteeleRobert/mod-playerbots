@@ -1495,6 +1495,19 @@ AiPlayerbot.LlmDirective.DisableThinking = 1
 # Default: 1 (enabled)
 AiPlayerbot.LlmDirective.PreemptCurrentStatus = 1
 
+# Mirror each decision, and notable events (died / quest_done / leveled_up),
+# into the two tables the bot dashboard reads:
+#   mod_ollama_bot_buddy_journal   one row per decision + the prompt, which the
+#                                  dashboard also mines for live bot positions
+#   mod_ollama_chat_bot_events     positions, deaths, counters, journey replay
+# This exists so the dashboard can be fed WITHOUT enabling mod-ollama-bot-buddy,
+# which clears the non-combat engine every tick for the bots it drives - i.e. the
+# exact engine this layer steers. Tables are never created here; they belong to
+# those modules, and if absent these writes are skipped silently.
+# Only ever runs for bots already opted in to the LLM layer.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.DashboardTelemetry = 1
+
 # Sampling temperature. This is a classification task; keep it low.
 # Default: 0.2
 AiPlayerbot.LlmDirective.Temperature = 0.2

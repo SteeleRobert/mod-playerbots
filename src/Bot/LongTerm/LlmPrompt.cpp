@@ -7,6 +7,7 @@
 #include "LlmPrompt.h"
 
 #include "LlmJournal.h"
+#include "DBCStores.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -191,6 +192,35 @@ namespace LlmPrompt
         uint8 const durabilityPct = botAI->GetAiObjectContext()->GetValue<uint8>("durability")->Get();
 
         std::ostringstream out;
+
+        // The bot dashboard mines this header out of the journalled prompt to get
+        // live positions: it locates the literal "Bot state summary:" and parses
+        // the next ~600 bytes with ^Name:/^Level:/^Area:/^Zone:/^Map:/^Position:.
+        // Keep the field names, the order and the leading line exactly as they are
+        // - see botdash/calls.py. It is also genuinely useful context for the model,
+        // which is why it goes in the real prompt rather than only in the copy.
+        {
+            char const* areaName = "Unknown";
+            if (AreaTableEntry const* area = sAreaTableStore.LookupEntry(bot->GetAreaId()))
+                if (area->area_name[LOCALE_enUS])
+                    areaName = area->area_name[LOCALE_enUS];
+
+            char const* mapName = "Unknown";
+            if (MapEntry const* mapEntry = sMapStore.LookupEntry(bot->GetMapId()))
+                if (mapEntry->name[LOCALE_enUS])
+                    mapName = mapEntry->name[LOCALE_enUS];
+
+            out << "Bot state summary:\n"
+                << "Name: " << bot->GetName() << "\n"
+                << "Level: " << uint32(bot->GetLevel()) << "\n"
+                << "Class: " << ClassName(bot->getClass()) << "\n"
+                << "Gold: " << (bot->GetMoney() / 10000) << "\n"
+                << "Area: " << areaName << "\n"
+                << "Zone: " << zoneName << "\n"
+                << "Map: " << mapName << "\n"
+                << "Position: " << bot->GetPositionX() << " " << bot->GetPositionY() << " "
+                << bot->GetPositionZ() << "\n\n";
+        }
 
         out << "You are the strategic planner for " << bot->GetName() << ", a level "
             << uint32(bot->GetLevel()) << " " << ClassName(bot->getClass())

@@ -108,6 +108,12 @@ private:
 
     uint32 _deathsSinceLastDecision{0};
     bool _wasDead{false};
+
+    // Last values seen by the dashboard event feed. Separate from the
+    // directive snapshot, because events must fire between decisions too.
+    uint32 _telemetryLevel{0};
+    uint32 _telemetryQuestRewarded{0};
+    bool _telemetryPrimed{false};
 };
 
 #endif

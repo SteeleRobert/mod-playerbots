@@ -406,6 +406,7 @@ public:
     uint32 llmDirectiveNumPredict;
     bool llmDirectiveDisableThinking;
     bool llmDirectivePreempt;
+    bool llmDirectiveDashboardTelemetry;
     float llmDirectiveTemperature;
     uint32 llmDirectiveTimeoutSeconds;
     uint32 llmDirectiveMaxConcurrent;

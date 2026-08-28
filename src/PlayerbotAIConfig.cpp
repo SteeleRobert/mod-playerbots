@@ -754,6 +754,12 @@ bool PlayerbotAIConfig::Initialize()
     // directives expire before the engine ever looks at them (measured: 44 of 45
     // decisions reported "the engine never took it up").
     llmDirectivePreempt = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.PreemptCurrentStatus", true);
+    // Mirror decisions and notable events into the tables the bot dashboard
+    // reads, so it can be fed without enabling mod-ollama-bot-buddy (which
+    // would clear the non-combat engine this layer steers). Only ever runs for
+    // bots already opted in to the LLM layer.
+    llmDirectiveDashboardTelemetry =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.DashboardTelemetry", true);
     llmDirectiveTemperature = sConfigMgr->GetOption<float>("AiPlayerbot.LlmDirective.Temperature", 0.2f);
     llmDirectiveTimeoutSeconds =
         std::max<uint32>(1, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.TimeoutSeconds", 60));
