@@ -1187,6 +1187,17 @@ bool NewRpgBaseAction::ApplyRpgStatus(NewRpgStatus chosenStatus)
         }
         case RPG_DO_QUEST:
         {
+            // A "turnin" directive means: of the quests you could work on, go and
+            // hand in the finished ones first. Decided once, up front, so that with
+            // the feature off the loop below does no work the classical path did not
+            // already do - no extra lookup per quest, no allocation.
+            bool wantsCompletedFirst = false;
+            if (sPlayerbotAIConfig.llmDirectiveEnabled)
+            {
+                PlayerbotLongTermAI* longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot);
+                wantsCompletedFirst = longTermAI && longTermAI->PrefersCompletedQuests();
+            }
+
             std::vector<uint32> availableQuests;
             std::vector<uint32> completeQuests;
             for (uint8 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
@@ -1199,19 +1210,15 @@ bool NewRpgBaseAction::ApplyRpgStatus(NewRpgStatus chosenStatus)
                 if (GetQuestPOIPosAndObjectiveIdx(questId, poiInfo, true))
                 {
                     availableQuests.push_back(questId);
-                    if (bot->GetQuestStatus(questId) == QUEST_STATUS_COMPLETE)
+                    if (wantsCompletedFirst && bot->GetQuestStatus(questId) == QUEST_STATUS_COMPLETE)
                         completeQuests.push_back(questId);
                 }
             }
-            // A "turnin" directive means: of the quests you could work on, go and
-            // hand in the finished ones first. If none of them has usable POI data
-            // the normal uniform pick still applies, so the bot never stalls.
-            if (sPlayerbotAIConfig.llmDirectiveEnabled && !completeQuests.empty())
-            {
-                PlayerbotLongTermAI* longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot);
-                if (longTermAI && longTermAI->PrefersCompletedQuests())
-                    availableQuests = completeQuests;
-            }
+            // If none of the finished quests has usable POI data the normal uniform
+            // pick still applies, so the bot never stalls waiting to turn in.
+            if (!completeQuests.empty())
+                availableQuests = completeQuests;
+
             if (availableQuests.size())
             {
                 uint32 questId = availableQuests[urand(0, availableQuests.size() - 1)];
