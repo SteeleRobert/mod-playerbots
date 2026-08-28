@@ -880,6 +880,16 @@ public:
     const std::vector<WorldLocation> GetTravelHubs(Player* bot);
     std::vector<WorldLocation> GetCityLocations(Player* bot);
     std::vector<uint32> GetFlightNodesInZone(uint32 zoneId, TeamId team, uint32 excludeNode = 0) const;
+
+    // Zones this bot could sensibly be sent to right now: inside its level bracket
+    // and served by a taxi node its faction can use. Used by the slow (LLM)
+    // strategic layer to enumerate the only zone names a directive may name.
+    std::vector<uint32> GetLevelAppropriateZones(Player* bot) const;
+
+    // Taxi path from the bot's nearest flight master into `zoneId`, or empty when
+    // there is no usable route. The zone-targeted counterpart of
+    // GetOptimalFlightDestinations, which picks a destination at random.
+    std::vector<uint32> GetFlightPathToZone(Player* bot, uint32 zoneId) const;
     bool SelectAuctioneerByMap(Player* bot, NpcLocation& outAuctioneer);
     const std::vector<WorldLocation>& GetLocsPerLevelCache(uint8 level) { return locsPerLevelCache[level]; }
 

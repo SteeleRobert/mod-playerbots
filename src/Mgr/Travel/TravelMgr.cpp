@@ -4401,6 +4401,52 @@ std::vector<uint32> TravelMgr::GetFlightNodesInZone(uint32 zoneId, TeamId team, 
     return result;
 }
 
+std::vector<uint32> TravelMgr::GetLevelAppropriateZones(Player* bot) const
+{
+    std::vector<uint32> zones;
+    if (!bot)
+        return zones;
+
+    uint32 const botLevel = bot->GetLevel();
+    for (auto const& [zoneId, bracket] : zone2LevelBracket)
+    {
+        if (botLevel < bracket.low || botLevel > bracket.high)
+            continue;
+        if (GetFlightNodesInZone(zoneId, bot->GetTeamId()).empty())
+            continue;
+        zones.push_back(zoneId);
+    }
+    return zones;
+}
+
+std::vector<uint32> TravelMgr::GetFlightPathToZone(Player* bot, uint32 zoneId) const
+{
+    std::vector<uint32> path;
+    if (!bot || !zoneId)
+        return path;
+
+    FlightMasterInfo const* nearestFlightMaster = GetNearestFlightMasterInfo(bot);
+    if (!nearestFlightMaster || bot->GetDistance(nearestFlightMaster->pos) > 500.0f)
+        return path;
+
+    uint32 const fromNode = nearestFlightMaster->taxiNodeId;
+    if (!fromNode)
+        return path;
+
+    std::vector<uint32> usableNodes = GetFlightNodesInZone(zoneId, bot->GetTeamId(), fromNode);
+    while (!usableNodes.empty())
+    {
+        uint32 const index = urand(0, usableNodes.size() - 1);
+        path = sTravelNodeMap.FindTaxiPath(fromNode, usableNodes[index]);
+        if (!path.empty())
+            return path;
+        usableNodes.erase(usableNodes.begin() + index);
+    }
+
+    path.clear();
+    return path;
+}
+
 std::vector<std::vector<uint32>> TravelMgr::GetOptimalFlightDestinations(Player* bot)
 {
     std::vector<std::vector<uint32>> validDestinations;

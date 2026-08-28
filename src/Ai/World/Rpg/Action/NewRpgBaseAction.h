@@ -61,6 +61,14 @@ protected:
     static WorldPosition SelectRandomCampPos(Player* bot);
     bool SelectRandomFlightTaxiNode(uint32& flightMasterEntry, WorldPosition& flightMasterPos, std::vector<uint32>& path);
     bool RandomChangeStatus(std::vector<NewRpgStatus> candidateStatus);
+    // Enters one concrete status (picking a grind spot / quest / taxi path as that
+    // status requires). Split out of RandomChangeStatus so the slow (LLM) layer can
+    // request a specific status without duplicating any of the entry logic.
+    bool ApplyRpgStatus(NewRpgStatus status);
+    // Zone-targeted variant of SelectRandomFlightTaxiNode, used only when a
+    // directive names a zone.
+    bool SelectFlightTaxiNodeToZone(uint32 zoneId, uint32& flightMasterEntry, WorldPosition& flightMasterPos,
+                                    std::vector<uint32>& path);
     bool CheckRpgStatusAvailable(NewRpgStatus status);
 
 protected:
