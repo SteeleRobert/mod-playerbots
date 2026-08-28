@@ -50,8 +50,24 @@ namespace
             }
             if (doc.contains("response") && doc["response"].is_string())
             {
-                out += doc["response"].get<std::string>();
-                return true;
+                std::string const text = doc["response"].get<std::string>();
+                if (!text.empty())
+                {
+                    out += text;
+                    return true;
+                }
+            }
+            // Empty "response" plus a populated "thinking" means the endpoint
+            // ignored think=false. The answer is in there; take it rather than
+            // reporting an empty reply.
+            if (doc.contains("thinking") && doc["thinking"].is_string())
+            {
+                std::string const text = doc["thinking"].get<std::string>();
+                if (!text.empty())
+                {
+                    out += text;
+                    return true;
+                }
             }
             return false;
         };
@@ -121,6 +137,14 @@ namespace
                 {"temperature", sPlayerbotAIConfig.llmDirectiveTemperature}
             }}
         };
+        // MEASURED: a reasoning model (qwen3.5) puts its answer in "thinking" and
+        // returns an EMPTY "response", which is indistinguishable downstream from
+        // the endpoint saying nothing at all. Asking it not to think is the fix;
+        // ExtractResponseText also falls back to "thinking" for endpoints that
+        // ignore this flag.
+        if (sPlayerbotAIConfig.llmDirectiveDisableThinking)
+            request["think"] = false;
+
         std::string const payload = request.dump();
 
         curl_slist* headers = curl_slist_append(nullptr, "Content-Type: application/json");

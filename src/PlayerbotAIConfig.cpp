@@ -745,6 +745,15 @@ bool PlayerbotAIConfig::Initialize()
     // presents exactly like a parse bug.
     llmDirectiveNumPredict =
         std::max<uint32>(64, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.NumPredict", 512));
+    // Reasoning models answer in a separate "thinking" field and leave "response"
+    // empty, which reads downstream as an empty reply. Ask for the answer only.
+    llmDirectiveDisableThinking =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.DisableThinking", true);
+    // A directive is only consumed at the New RPG IDLE status roll. A bot already
+    // in DO_QUEST does not re-roll for up to 30 minutes, so without this most
+    // directives expire before the engine ever looks at them (measured: 44 of 45
+    // decisions reported "the engine never took it up").
+    llmDirectivePreempt = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.PreemptCurrentStatus", true);
     llmDirectiveTemperature = sConfigMgr->GetOption<float>("AiPlayerbot.LlmDirective.Temperature", 0.2f);
     llmDirectiveTimeoutSeconds =
         std::max<uint32>(1, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.TimeoutSeconds", 60));

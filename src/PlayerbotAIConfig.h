@@ -404,6 +404,8 @@ public:
     std::string llmDirectiveUrl;
     std::string llmDirectiveModel;
     uint32 llmDirectiveNumPredict;
+    bool llmDirectiveDisableThinking;
+    bool llmDirectivePreempt;
     float llmDirectiveTemperature;
     uint32 llmDirectiveTimeoutSeconds;
     uint32 llmDirectiveMaxConcurrent;

@@ -5,6 +5,7 @@
 #include "PlayerbotMgr.h"
 #include "RandomPlayerbotMgr.h"
 #include <nlohmann/json.hpp>
+#include <algorithm>
 #include <sstream>
 
 using json = nlohmann::json;
@@ -292,6 +293,29 @@ void PlayerbotLongTermAI::ConsumeReply(LlmReply const& reply)
         {
             _atIssueQuestRewarded = botAI->rpgStatistic.questRewarded;
             _atIssueQuestAccepted = botAI->rpgStatistic.questAccepted;
+        }
+
+        // Send the bot back to IDLE so the New RPG machine re-rolls its status on the
+        // next tick and our hook gets first refusal. Without this the directive waits
+        // for whatever the bot is already doing to time out - up to 30 minutes for
+        // DO_QUEST - and usually expires unused.
+        if (sPlayerbotAIConfig.llmDirectivePreempt)
+        {
+            if (PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot))
+            {
+                NewRpgStatus const current = botAI->rpgInfo.GetStatus();
+                std::vector<NewRpgStatus> const preferred = GetPreferredRpgStatuses();
+                bool const alreadyDoingIt =
+                    std::find(preferred.begin(), preferred.end(), current) != preferred.end();
+
+                // Never interrupt a taxi hop (the bot is mid-air and the flight is the
+                // only cross-zone transport there is), and never yank it out of combat.
+                bool const busyUninterruptible =
+                    current == RPG_TRAVEL_FLIGHT || bot->IsInCombat() || !bot->IsAlive();
+
+                if (!alreadyDoingIt && !busyUninterruptible)
+                    botAI->rpgInfo.ChangeToIdle();
+            }
         }
 
         LlmHistoryEntry entry;

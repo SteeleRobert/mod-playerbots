@@ -1477,6 +1477,24 @@ AiPlayerbot.LlmDirective.Model = "llama3.1:8b"
 # Default: 512
 AiPlayerbot.LlmDirective.NumPredict = 512
 
+# Send "think": false with each request. Reasoning models (qwen3.5, and any
+# Ollama model with the "thinking" capability) otherwise put the answer in a
+# separate `thinking` field and return an EMPTY `response`, which looks exactly
+# like the endpoint saying nothing. Measured on qwen3.5:4b. Leave this on unless
+# your endpoint rejects the field; the client also falls back to reading
+# `thinking` for endpoints that ignore it.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.DisableThinking = 1
+
+# When a new directive is accepted and the bot is doing something else, send it
+# back to the New RPG IDLE state so it re-rolls its status immediately and picks
+# the directive up. A directive is only ever consumed at that roll, and a bot in
+# DO_QUEST does not re-roll for up to 30 minutes - measured without this, 44 of 45
+# decisions expired reporting "the engine never took it up". Taxi flights, combat
+# and death are never interrupted. Turn off for a strictly hands-off layer.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.PreemptCurrentStatus = 1
+
 # Sampling temperature. This is a classification task; keep it low.
 # Default: 0.2
 AiPlayerbot.LlmDirective.Temperature = 0.2
