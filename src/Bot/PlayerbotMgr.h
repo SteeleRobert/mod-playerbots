@@ -13,6 +13,7 @@
 
 class ChatHandler;
 class PlayerbotAI;
+class PlayerbotLongTermAI;
 class PlayerbotLoginQueryHolder;
 class WorldPacket;
 
@@ -107,8 +108,11 @@ public:
 
     void AddPlayerbotData(Player* player, bool isBotAI);
     void RemovePlayerBotData(ObjectGuid const& guid, bool is_AI);
+    void RemovePlayerbotAI(ObjectGuid const& guid);
+    void RemovePlayerbotLongTermAI(ObjectGuid const& guid);
 
     PlayerbotAI* GetPlayerbotAI(Player* player);
+    PlayerbotLongTermAI* GetPlayerbotLongTermAI(Player* player);
     PlayerbotMgr* GetPlayerbotMgr(Player* player);
 
 private:
@@ -122,6 +126,7 @@ private:
     PlayerbotsMgr& operator=(PlayerbotsMgr&&) = delete;
 
     std::unordered_map<ObjectGuid, PlayerbotAIBase*> _playerbotsAIMap;
+    std::unordered_map<ObjectGuid, PlayerbotLongTermAI*> _playerbotsLongTermAIMap;
     std::unordered_map<ObjectGuid, PlayerbotAIBase*> _playerbotsMgrMap;
 };
 
