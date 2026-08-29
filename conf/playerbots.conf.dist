@@ -1508,6 +1508,21 @@ AiPlayerbot.LlmDirective.PreemptCurrentStatus = 1
 # Default: 1 (enabled)
 AiPlayerbot.LlmDirective.DashboardTelemetry = 1
 
+# Strip the liveness cheats the classical random-bot machinery relies on, for
+# opted-in bots only:
+#   - MoveFarTo's teleport-when-stuck recovery. An honest bot that cannot walk to
+#     a destination abandons it and picks another, rather than blinking there.
+#   - RandomTeleport in all its forms: the periodic hub relocation, the grind
+#     relocation, the level-up relocation and the post-death relocation.
+#   - Refresh's free durability repair, full heal, mana/energy refill, consumable
+#     restock and pocket-money grant.
+# The post-death resurrect is deliberately kept: nothing else revives a random
+# bot, so removing it would just leave corpses lying around forever.
+# This matters for honest measurement - a bot that teleports out of a bad
+# destination makes the strategic layer that chose it look better than it is.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.NoCheating = 1
+
 # Sampling temperature. This is a classification task; keep it low.
 # Default: 0.2
 AiPlayerbot.LlmDirective.Temperature = 0.2

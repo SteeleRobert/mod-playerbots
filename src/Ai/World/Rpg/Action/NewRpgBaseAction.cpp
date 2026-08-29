@@ -23,6 +23,7 @@
 #include "PathGenerator.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
+#include "LongTerm/LlmTelemetry.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
@@ -101,6 +102,28 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
         // its RPG objective instead of oscillating indefinitely.
         botAI->rpgInfo.stuckTs = getMSTime();
         botAI->rpgInfo.stuckAttempts = 0;
+
+        // Honest bots do not teleport out of a pathfinding failure. If the
+        // destination cannot be walked to, that is a fact about the world and the
+        // bot should pick a different objective - which is exactly what returning
+        // to IDLE makes it do on the next tick. Teleporting here would quietly
+        // paper over every bad destination the strategic layer ever chooses, and
+        // make its decisions look better than they are.
+        if (PlayerbotLongTermAI::IsHonestBot(bot))
+        {
+            LOG_DEBUG("playerbots", "[New RPG] Bot {} could not walk to its destination; abandoning it "
+                                    "(no-cheat mode) instead of teleporting",
+                      bot->GetName());
+            // Recorded rather than only logged: this is the one place an honest bot
+            // visibly fails at something the cheating bot papers over, so it needs
+            // to be countable. It also drives the dashboard's stuck panel.
+            LlmTelemetry::RecordEvent(bot, LlmTelemetry::EVENT_STUCK,
+                                      "{\"abandoned_destination\":true}");
+            botAI->rpgInfo.nearestMoveFarDis = FLT_MAX;
+            botAI->rpgInfo.ChangeToIdle();
+            return false;
+        }
+
         const AreaTableEntry* entry = sAreaTableStore.LookupEntry(bot->GetZoneId());
         std::string zone_name = PlayerbotAI::GetLocalizedAreaName(entry);
         LOG_DEBUG(

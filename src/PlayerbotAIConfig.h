@@ -407,6 +407,7 @@ public:
     bool llmDirectiveDisableThinking;
     bool llmDirectivePreempt;
     bool llmDirectiveDashboardTelemetry;
+    bool llmDirectiveNoCheating;
     float llmDirectiveTemperature;
     uint32 llmDirectiveTimeoutSeconds;
     uint32 llmDirectiveMaxConcurrent;

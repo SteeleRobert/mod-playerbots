@@ -53,6 +53,11 @@ public:
     // True when the feature is on and this bot is one of the opted-in ones.
     bool IsDirectiveLayerActive();
 
+    // True when this bot must play honestly: no teleporting in place of
+    // walking, no free repair/heal/money/restock. Asked by the classical
+    // subsystems that own those cheats, so it is static and null-safe.
+    static bool IsHonestBot(Player* bot);
+
     // RPG statuses to try, in order, before falling back to the normal weighted
     // roll. Empty whenever there is nothing to say, which is the common case.
     std::vector<NewRpgStatus> GetPreferredRpgStatuses();

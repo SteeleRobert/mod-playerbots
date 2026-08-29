@@ -760,6 +760,10 @@ bool PlayerbotAIConfig::Initialize()
     // bots already opted in to the LLM layer.
     llmDirectiveDashboardTelemetry =
         sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.DashboardTelemetry", true);
+    // Strip the liveness cheats the classical random-bot machinery relies on:
+    // teleporting instead of walking, free repair/heal/money/restock. An LLM bot
+    // that teleports out of a bad decision is not demonstrating anything.
+    llmDirectiveNoCheating = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.NoCheating", true);
     llmDirectiveTemperature = sConfigMgr->GetOption<float>("AiPlayerbot.LlmDirective.Temperature", 0.2f);
     llmDirectiveTimeoutSeconds =
         std::max<uint32>(1, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.TimeoutSeconds", 60));

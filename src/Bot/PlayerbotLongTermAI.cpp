@@ -97,6 +97,15 @@ bool PlayerbotLongTermAI::IsDirectiveLayerActive()
     return _optIn == 1;
 }
 
+bool PlayerbotLongTermAI::IsHonestBot(Player* bot)
+{
+    if (!bot || !sPlayerbotAIConfig.llmDirectiveEnabled || !sPlayerbotAIConfig.llmDirectiveNoCheating)
+        return false;
+
+    PlayerbotLongTermAI* longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot);
+    return longTermAI && longTermAI->IsDirectiveLayerActive();
+}
+
 uint32 PlayerbotLongTermAI::GetDirectiveZoneId() const
 {
     return _directive.IsActive() ? _directive.zoneId : 0;

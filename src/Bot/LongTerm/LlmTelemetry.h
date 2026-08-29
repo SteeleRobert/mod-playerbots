@@ -42,6 +42,7 @@ namespace LlmTelemetry
     constexpr char const* EVENT_DIED       = "died";
     constexpr char const* EVENT_QUEST_DONE = "quest_done";
     constexpr char const* EVENT_LEVELED_UP = "leveled_up";
+    constexpr char const* EVENT_STUCK      = "stuck";
 
     // One decision -> one journal row. `command` is the directive verb, so the
     // dashboard's per-command breakdown shows quest/grind/travel/turnin/vendor.
