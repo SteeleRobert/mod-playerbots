@@ -21,8 +21,11 @@ namespace LlmPrompt
     //
     // `legalZones` is filled with exactly the zone list the prompt offers, so the
     // reply can later be validated against what the model was actually shown.
+    // `legalQuests` is filled with the quest ids the prompt offered as workable,
+    // so the reply can be validated against exactly what the model was shown.
     std::string BuildDecisionPrompt(Player* bot, uint32 deathsSinceLastDecision,
-                                    std::vector<LlmZoneChoice>& legalZones);
+                                    std::vector<LlmZoneChoice>& legalZones,
+                                    std::vector<uint32>& legalQuests);
 }
 
 #endif

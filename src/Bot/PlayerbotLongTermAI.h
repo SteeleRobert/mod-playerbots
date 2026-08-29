@@ -70,6 +70,9 @@ public:
     // "turnin" asks the quest picker to prefer quests that are already complete.
     bool PrefersCompletedQuests() const;
 
+    // Quest the current directive named, or 0 to let the engine pick.
+    uint32 GetDirectiveQuestId() const;
+
     // The engine took the directive up; recorded so the next prompt can say
     // whether the intent ever actually reached the world.
     void NoteDirectiveApplied(NewRpgStatus status);
@@ -96,6 +99,7 @@ private:
     bool _pending{false};
     std::string _pendingPrompt;
     std::vector<LlmZoneChoice> _pendingZones;
+    std::vector<uint32> _pendingQuests;
 
     LlmDirective _directive;
     uint32 _directiveApplyCount{0};

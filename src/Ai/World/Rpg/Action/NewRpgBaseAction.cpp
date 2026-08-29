@@ -5,6 +5,8 @@
  */
 
 #include "NewRpgBaseAction.h"
+
+#include <algorithm>
 #include "BroadcastHelper.h"
 #include "ChatHelper.h"
 #include "Creature.h"
@@ -1244,7 +1246,25 @@ bool NewRpgBaseAction::ApplyRpgStatus(NewRpgStatus chosenStatus)
 
             if (availableQuests.size())
             {
-                uint32 questId = availableQuests[urand(0, availableQuests.size() - 1)];
+                // The strategic layer may name the quest. Honoured only when that
+                // quest is genuinely workable right now (in the log, not blacklisted,
+                // with POI data on this map and zone) - otherwise the engine's own
+                // uniform pick stands, which is strictly better than chasing a quest
+                // the bot cannot make progress on.
+                uint32 questId = 0;
+                if (sPlayerbotAIConfig.llmDirectiveEnabled)
+                {
+                    PlayerbotLongTermAI* longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot);
+                    uint32 const chosen = longTermAI ? longTermAI->GetDirectiveQuestId() : 0;
+                    if (chosen && std::find(availableQuests.begin(), availableQuests.end(), chosen) !=
+                                      availableQuests.end())
+                    {
+                        questId = chosen;
+                    }
+                }
+
+                if (!questId)
+                    questId = availableQuests[urand(0, availableQuests.size() - 1)];
                 const Quest* quest = sObjectMgr->GetQuestTemplate(questId);
                 if (quest)
                 {

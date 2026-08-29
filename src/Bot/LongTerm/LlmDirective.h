@@ -47,6 +47,7 @@ struct LlmDirective
 {
     LlmDirectiveAction action{LlmDirectiveAction::NONE};
     uint32 zoneId{0};        // 0 = no zone preference
+    uint32 questId{0};       // 0 = let the engine pick, as it always did
     std::string zoneName;    // resolved name, for logs and the next prompt
     std::string reason;      // the model's own justification, truncated
     uint32 issuedAtMs{0};    // getMSTime() when it was accepted
@@ -64,7 +65,7 @@ namespace LlmDirectiveParser
     // A reply that does not parse is a FAILURE, never something to store raw and
     // hope for: the caller drops back to plain classical behaviour and journals it.
     bool Parse(std::string const& raw, std::vector<LlmZoneChoice> const& legalZones,
-               LlmDirective& out, std::string& error);
+               std::vector<uint32> const& legalQuests, LlmDirective& out, std::string& error);
 }
 
 namespace LlmZones

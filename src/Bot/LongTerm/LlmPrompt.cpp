@@ -79,7 +79,8 @@ namespace
         return out;
     }
 
-    void AppendQuestLog(Player* bot, std::ostringstream& out, uint32& completeCount)
+    void AppendQuestLog(Player* bot, std::ostringstream& out, uint32& completeCount,
+                        std::vector<uint32>& legalQuests)
     {
         completeCount = 0;
         uint32 listed = 0;
@@ -104,13 +105,20 @@ namespace
             if (isComplete)
                 ++completeCount;
 
+            // Every quest in the log is nameable. Whether it is actually *workable*
+            // (POI data on this map and in this zone) is decided by the engine when
+            // the directive is applied; offering the whole log keeps the prompt
+            // honest about what the bot is carrying.
+            legalQuests.push_back(questId);
+
             // The log can hold 25; listing every one of them crowds out the parts of
             // the prompt that actually change the decision.
             if (listed >= 12)
                 continue;
             ++listed;
 
-            out << "- " << (isComplete ? "[READY TO TURN IN] " : "") << Sanitize(quest->GetTitle(), 60)
+            out << "- [id " << questId << "] " << (isComplete ? "[READY TO TURN IN] " : "")
+                << Sanitize(quest->GetTitle(), 60)
                 << " (lvl " << quest->GetQuestLevel() << ")";
 
             int32 const questZone = quest->GetZoneOrSort();
@@ -170,8 +178,10 @@ namespace
 namespace LlmPrompt
 {
     std::string BuildDecisionPrompt(Player* bot, uint32 deathsSinceLastDecision,
-                                    std::vector<LlmZoneChoice>& legalZones)
+                                    std::vector<LlmZoneChoice>& legalZones,
+                                    std::vector<uint32>& legalQuests)
     {
+        legalQuests.clear();
         PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
         if (!botAI)
             return "";
@@ -243,7 +253,7 @@ namespace LlmPrompt
 
         uint32 completeCount = 0;
         std::ostringstream questLog;
-        AppendQuestLog(bot, questLog, completeCount);
+        AppendQuestLog(bot, questLog, completeCount, legalQuests);
         out << "QUEST LOG (" << completeCount << " ready to turn in)\n" << questLog.str() << "\n";
 
         std::vector<LlmHistoryEntry> const history =
@@ -277,8 +287,13 @@ namespace LlmPrompt
             out << (i ? " | " : "  ") << legalZones[i].name;
         out << "\n\n";
 
+        out << "For \"quest\" or \"turnin\" you MAY name one quest from the log above by its\n"
+               "id, and the bot will work on that one. Leave quest_id as 0 to let the bot\n"
+               "choose for itself.\n\n";
+
         out << "Answer with ONE JSON object and nothing else, in exactly this shape:\n"
-            << "{\"action\":\"quest|grind|travel|turnin|vendor\",\"zone\":\"\",\"reason\":\"under 20 words\"}\n";
+            << "{\"action\":\"quest|grind|travel|turnin|vendor\",\"zone\":\"\","
+               "\"quest_id\":0,\"reason\":\"under 20 words\"}\n";
 
         return out.str();
     }

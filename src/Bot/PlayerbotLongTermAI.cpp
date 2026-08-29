@@ -111,6 +111,11 @@ uint32 PlayerbotLongTermAI::GetDirectiveZoneId() const
     return _directive.IsActive() ? _directive.zoneId : 0;
 }
 
+uint32 PlayerbotLongTermAI::GetDirectiveQuestId() const
+{
+    return _directive.IsActive() ? _directive.questId : 0;
+}
+
 bool PlayerbotLongTermAI::PrefersCompletedQuests() const
 {
     return _directive.IsActive() && _directive.action == LlmDirectiveAction::TURNIN;
@@ -269,7 +274,8 @@ void PlayerbotLongTermAI::UpdateAI(uint32 /*elapsed*/, bool /*minimal*/)
 void PlayerbotLongTermAI::RequestDecision(uint32 now)
 {
     std::vector<LlmZoneChoice> zones;
-    std::string prompt = LlmPrompt::BuildDecisionPrompt(bot, _deathsSinceLastDecision, zones);
+    std::vector<uint32> quests;
+    std::string prompt = LlmPrompt::BuildDecisionPrompt(bot, _deathsSinceLastDecision, zones, quests);
     if (prompt.empty())
     {
         _nextDecisionMs = now + 30 * 1000;
@@ -287,6 +293,7 @@ void PlayerbotLongTermAI::RequestDecision(uint32 now)
     _pending = true;
     _pendingPrompt = std::move(prompt);
     _pendingZones = std::move(zones);
+    _pendingQuests = std::move(quests);
 
     uint32 const jitter = sPlayerbotAIConfig.llmDirectiveJitterSeconds;
     _nextDecisionMs = now + sPlayerbotAIConfig.llmDirectiveIntervalSeconds * 1000 +
@@ -325,7 +332,7 @@ void PlayerbotLongTermAI::ConsumeReply(LlmReply const& reply)
     {
         error = reply.error;
     }
-    else if (!LlmDirectiveParser::Parse(reply.raw, _pendingZones, parsed, error))
+    else if (!LlmDirectiveParser::Parse(reply.raw, _pendingZones, _pendingQuests, parsed, error))
     {
         // Parse failure is a failure, full stop. Nothing is stored as a directive,
         // and the bot spends the next interval as a plain classical bot.
@@ -403,6 +410,7 @@ void PlayerbotLongTermAI::ConsumeReply(LlmReply const& reply)
     _deathsSinceLastDecision = 0;
     _pendingPrompt.clear();
     _pendingZones.clear();
+    _pendingQuests.clear();
 
     if (sPlayerbotAIConfig.llmDirectiveJournal)
         LlmJournal::Write(record);

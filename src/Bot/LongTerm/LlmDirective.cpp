@@ -55,6 +55,8 @@ LlmDirectiveAction LlmDirectiveActionFromString(std::string const& name)
 std::string LlmDirective::Describe() const
 {
     std::string out = LlmDirectiveActionToString(action);
+    if (questId)
+        out += " #" + std::to_string(questId);
     if (zoneId)
         out += " -> " + (zoneName.empty() ? std::to_string(zoneId) : zoneName);
     return out;
@@ -63,7 +65,7 @@ std::string LlmDirective::Describe() const
 namespace LlmDirectiveParser
 {
     bool Parse(std::string const& raw, std::vector<LlmZoneChoice> const& legalZones,
-               LlmDirective& out, std::string& error)
+               std::vector<uint32> const& legalQuests, LlmDirective& out, std::string& error)
     {
         out = LlmDirective();
 
@@ -165,6 +167,30 @@ namespace LlmDirectiveParser
         {
             error = "travel requires a zone from the offered list";
             return false;
+        }
+
+        // Optional: name one quest from the log to work on. Validated against the
+        // set the prompt actually offered, exactly like the zone - a quest the bot
+        // does not hold, or that has no usable POI data, is not actionable and the
+        // engine's own pick is a better answer than a wrong one.
+        if (doc.contains("quest_id"))
+        {
+            uint32 requested = 0;
+            if (doc["quest_id"].is_number_unsigned())
+                requested = doc["quest_id"].get<uint32>();
+            else if (doc["quest_id"].is_string())
+            {
+                try { requested = static_cast<uint32>(std::stoul(doc["quest_id"].get<std::string>())); }
+                catch (std::exception const&) { requested = 0; }
+            }
+
+            if (requested)
+            {
+                if (std::find(legalQuests.begin(), legalQuests.end(), requested) != legalQuests.end())
+                    out.questId = requested;
+                else
+                    out.note = "ignored quest_id " + std::to_string(requested) + " (not workable right now)";
+            }
         }
 
         if (doc.contains("reason") && doc["reason"].is_string())
