@@ -37,6 +37,65 @@ namespace
     // Ollama with "stream": false answers with a single JSON object, but the
     // shim/proxy in front of it may still emit NDJSON. Accept both: parse the whole
     // body first, and fall back to concatenating the "response" field of each line.
+    // OpenAI-compatible (vLLM): the answer is choices[0].message.content, and a
+    // reasoning model puts its scratchpad in choices[0].message.reasoning_content -
+    // the exact analogue of Ollama's "thinking", with the same failure mode of an
+    // empty content field. /v1/completions style (choices[0].text) is accepted too.
+    std::string ExtractOpenAiText(std::string const& body, std::string& error)
+    {
+        try
+        {
+            nlohmann::json doc = nlohmann::json::parse(body);
+
+            if (doc.contains("error"))
+            {
+                nlohmann::json const& err = doc["error"];
+                error = err.is_string() ? err.get<std::string>()
+                      : (err.is_object() && err.contains("message") && err["message"].is_string())
+                            ? err["message"].get<std::string>()
+                            : err.dump();
+                return "";
+            }
+
+            if (!doc.contains("choices") || !doc["choices"].is_array() || doc["choices"].empty())
+            {
+                error = "no choices in reply";
+                return "";
+            }
+
+            nlohmann::json const& choice = doc["choices"][0];
+
+            if (choice.contains("message") && choice["message"].is_object())
+            {
+                nlohmann::json const& message = choice["message"];
+                for (char const* key : {"content", "reasoning_content"})
+                {
+                    if (message.contains(key) && message[key].is_string())
+                    {
+                        std::string const text = message[key].get<std::string>();
+                        if (!text.empty())
+                            return text;
+                    }
+                }
+            }
+
+            if (choice.contains("text") && choice["text"].is_string())
+            {
+                std::string const text = choice["text"].get<std::string>();
+                if (!text.empty())
+                    return text;
+            }
+
+            error = "reply carried no content";
+            return "";
+        }
+        catch (std::exception const& e)
+        {
+            error = std::string("could not parse reply envelope: ") + e.what();
+            return "";
+        }
+    }
+
     std::string ExtractResponseText(std::string const& body, std::string& error)
     {
         auto pull = [&](nlohmann::json const& doc, std::string& out) -> bool
@@ -109,7 +168,9 @@ namespace
         return out;
     }
 
-    std::string PerformRequest(std::string const& prompt, std::string& error)
+    // One HTTP POST. Shared by both API shapes so the transport, timeout and error
+    // handling cannot drift apart between them.
+    std::string PerformPost(std::string const& payload, std::string& error, bool openAi)
     {
         std::call_once(g_curlInit, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
 
@@ -119,33 +180,6 @@ namespace
             error = "curl_easy_init failed";
             return "";
         }
-
-        // HARD-WON: passing a JSON *schema* in `format` is silently ignored by the
-        // MLX runner - it answers in prose and every reply is discarded. Plain
-        // "json" is honoured by every runner we have measured, so the shape is
-        // pinned in the prompt text instead and `format` stays a bare "json".
-        nlohmann::json request = {
-            {"model", sPlayerbotAIConfig.llmDirectiveModel},
-            {"prompt", prompt},
-            {"stream", false},
-            {"format", "json"},
-            {"options", {
-                // HARD-WON: a sibling feature shipped with num_predict ~128 and 97%
-                // of its replies were cut off mid-object. Size this to the reply you
-                // actually want, and treat a short/unparseable reply as a failure.
-                {"num_predict", sPlayerbotAIConfig.llmDirectiveNumPredict},
-                {"temperature", sPlayerbotAIConfig.llmDirectiveTemperature}
-            }}
-        };
-        // MEASURED: a reasoning model (qwen3.5) puts its answer in "thinking" and
-        // returns an EMPTY "response", which is indistinguishable downstream from
-        // the endpoint saying nothing at all. Asking it not to think is the fix;
-        // ExtractResponseText also falls back to "thinking" for endpoints that
-        // ignore this flag.
-        if (sPlayerbotAIConfig.llmDirectiveDisableThinking)
-            request["think"] = false;
-
-        std::string const payload = request.dump();
 
         curl_slist* headers = curl_slist_append(nullptr, "Content-Type: application/json");
 
@@ -173,11 +207,81 @@ namespace
         }
         if (httpCode < 200 || httpCode >= 300)
         {
-            error = "http " + std::to_string(httpCode);
+            // The body usually explains a 4xx far better than the status alone.
+            error = "http " + std::to_string(httpCode) + ": " + body.substr(0, 200);
             return "";
         }
 
-        return ExtractResponseText(body, error);
+        return openAi ? ExtractOpenAiText(body, error) : ExtractResponseText(body, error);
+    }
+
+    std::string PerformRequest(std::string const& prompt, std::string& error)
+    {
+        std::call_once(g_curlInit, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
+
+        CURL* curl = curl_easy_init();
+        if (!curl)
+        {
+            error = "curl_easy_init failed";
+            return "";
+        }
+
+        // HARD-WON: passing a JSON *schema* in `format` is silently ignored by the
+        // MLX runner - it answers in prose and every reply is discarded. Plain
+        // "json" is honoured by every runner we have measured, so the shape is
+        // pinned in the prompt text instead and `format` stays a bare "json".
+        bool const openAi = sPlayerbotAIConfig.llmDirectiveOpenAiApi;
+
+        nlohmann::json request;
+        if (openAi)
+        {
+            request = {
+                {"model", sPlayerbotAIConfig.llmDirectiveModel},
+                {"messages", nlohmann::json::array({
+                    {{"role", "user"}, {"content", prompt}}
+                })},
+                {"stream", false},
+                // vLLM honours this; it is the OpenAI-side equivalent of Ollama's
+                // format:"json". The shape still goes in the prompt text as well -
+                // a *schema* is silently ignored by several runners, so it is never
+                // the only thing holding the output together.
+                {"response_format", {{"type", "json_object"}}},
+                {"max_tokens", sPlayerbotAIConfig.llmDirectiveNumPredict},
+                {"temperature", sPlayerbotAIConfig.llmDirectiveTemperature}
+            };
+
+            // Qwen-family chat templates take this; it is how thinking is turned off
+            // on the vLLM side, where there is no top-level "think" flag.
+            if (sPlayerbotAIConfig.llmDirectiveDisableThinking)
+                request["chat_template_kwargs"] = {{"enable_thinking", false}};
+
+            std::string const payloadOpenAi = request.dump();
+            return PerformPost(payloadOpenAi, error, /*openAi*/ true);
+        }
+
+        request = {
+            {"model", sPlayerbotAIConfig.llmDirectiveModel},
+            {"prompt", prompt},
+            {"stream", false},
+            {"format", "json"},
+            {"options", {
+                // HARD-WON: a sibling feature shipped with num_predict ~128 and 97%
+                // of its replies were cut off mid-object. Size this to the reply you
+                // actually want, and treat a short/unparseable reply as a failure.
+                {"num_predict", sPlayerbotAIConfig.llmDirectiveNumPredict},
+                {"temperature", sPlayerbotAIConfig.llmDirectiveTemperature}
+            }}
+        };
+        // MEASURED: a reasoning model (qwen3.5) puts its answer in "thinking" and
+        // returns an EMPTY "response", which is indistinguishable downstream from
+        // the endpoint saying nothing at all. Asking it not to think is the fix;
+        // ExtractResponseText also falls back to "thinking" for endpoints that
+        // ignore this flag.
+        if (sPlayerbotAIConfig.llmDirectiveDisableThinking)
+            request["think"] = false;
+
+        std::string const payload = request.dump();
+        return PerformPost(payload, error, /*openAi*/ false);
     }
 }
 

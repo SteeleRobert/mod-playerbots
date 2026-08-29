@@ -408,6 +408,9 @@ public:
     bool llmDirectivePreempt;
     bool llmDirectiveDashboardTelemetry;
     bool llmDirectiveNoCheating;
+    // false = Ollama /api/generate, true = OpenAI-compatible
+    // /v1/chat/completions (what vLLM serves).
+    bool llmDirectiveOpenAiApi;
     float llmDirectiveTemperature;
     uint32 llmDirectiveTimeoutSeconds;
     uint32 llmDirectiveMaxConcurrent;

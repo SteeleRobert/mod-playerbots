@@ -17,6 +17,7 @@
 #include "RandomPlayerbotMgr.h"
 #include "Talentspec.h"
 #include "TravelMgr.h"
+#include <algorithm>
 #include <cctype>
 #include <iostream>
 #include <sstream>
@@ -764,6 +765,15 @@ bool PlayerbotAIConfig::Initialize()
     // teleporting instead of walking, free repair/heal/money/restock. An LLM bot
     // that teleports out of a bad decision is not demonstrating anything.
     llmDirectiveNoCheating = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.NoCheating", true);
+    // "ollama" (default) or "openai". vLLM serves the OpenAI-compatible API, so
+    // that is what a vLLM deployment wants; the Url must then point at
+    // /v1/chat/completions rather than /api/generate.
+    {
+        std::string api = sConfigMgr->GetOption<std::string>("AiPlayerbot.LlmDirective.Api", "ollama");
+        std::transform(api.begin(), api.end(), api.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        llmDirectiveOpenAiApi = (api == "openai" || api == "vllm");
+    }
     llmDirectiveTemperature = sConfigMgr->GetOption<float>("AiPlayerbot.LlmDirective.Temperature", 0.2f);
     llmDirectiveTimeoutSeconds =
         std::max<uint32>(1, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.TimeoutSeconds", 60));

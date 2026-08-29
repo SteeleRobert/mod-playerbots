@@ -1464,6 +1464,15 @@ AiPlayerbot.LlmDirective.JitterSeconds = 60
 # Ollama-compatible generate endpoint. Must be reachable from the worldserver host.
 # On this deployment an Ollama-compatible shim listens on :11434.
 # Default: http://127.0.0.1:11434/api/generate
+# Which HTTP API the endpoint speaks.
+#   ollama  - Ollama's native /api/generate           (default)
+#   openai  - the OpenAI-compatible /v1/chat/completions, which is what vLLM
+#             serves. Also accepts the alias "vllm".
+# The Url below must match: /api/generate for ollama, /v1/chat/completions for
+# openai. On olab1 that is http://127.0.0.1:8123/v1/chat/completions.
+# Default: ollama
+AiPlayerbot.LlmDirective.Api = "ollama"
+
 AiPlayerbot.LlmDirective.Url = "http://127.0.0.1:11434/api/generate"
 
 # Model name passed to the endpoint.
