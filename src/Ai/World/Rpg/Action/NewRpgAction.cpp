@@ -613,12 +613,18 @@ bool NewRpgDoQuestAction::DoIncompleteQuest(NewRpgInfo::DoQuest& data)
         int32 objectiveIdx = poiInfo[rndIdx].objectiveIdx;
 
         float dx = nearestPoi.x, dy = nearestPoi.y;
+        std::pair<float, bool> const anchoredZ{poiInfo[rndIdx].z, poiInfo[rndIdx].anchored};
 
-        // z = MAX_HEIGHT as we do not know accurate z
-        float dz = std::max(bot->GetMap()->GetHeight(dx, dy, MAX_HEIGHT), bot->GetMap()->GetWaterLevel(dx, dy));
+        // Prefer the height resolved alongside the POI, which comes from the real
+        // spawn of the mob or quest ender this objective refers to. The old
+        // MAX_HEIGHT ray put indoor and underground objectives on the roof above.
+        float dz = anchoredZ.second
+                       ? anchoredZ.first
+                       : std::max(bot->GetMap()->GetHeight(dx, dy, MAX_HEIGHT),
+                                  bot->GetMap()->GetWaterLevel(dx, dy));
 
         // double check for GetQuestPOIPosAndObjectiveIdx
-        if (dz == INVALID_HEIGHT || dz == VMAP_INVALID_HEIGHT_VALUE)
+        if (!anchoredZ.second && (dz == INVALID_HEIGHT || dz == VMAP_INVALID_HEIGHT_VALUE))
             return false;
 
         WorldPosition pos(bot->GetMapId(), dx, dy, dz);
@@ -708,11 +714,17 @@ bool NewRpgDoQuestAction::DoCompletedQuest(NewRpgInfo::DoQuest& data)
         assert(poiInfo.size() > 0);
         // now we get the place to get rewarded
         float dx = poiInfo[0].pos.x, dy = poiInfo[0].pos.y;
-        // z = MAX_HEIGHT as we do not know accurate z
-        float dz = std::max(bot->GetMap()->GetHeight(dx, dy, MAX_HEIGHT), bot->GetMap()->GetWaterLevel(dx, dy));
+        std::pair<float, bool> const anchoredZ{poiInfo[0].z, poiInfo[0].anchored};
+        // Prefer the height resolved alongside the POI, which comes from the real
+        // spawn of the mob or quest ender this objective refers to. The old
+        // MAX_HEIGHT ray put indoor and underground objectives on the roof above.
+        float dz = anchoredZ.second
+                       ? anchoredZ.first
+                       : std::max(bot->GetMap()->GetHeight(dx, dy, MAX_HEIGHT),
+                                  bot->GetMap()->GetWaterLevel(dx, dy));
 
         // double check for GetQuestPOIPosAndObjectiveIdx
-        if (dz == INVALID_HEIGHT || dz == VMAP_INVALID_HEIGHT_VALUE)
+        if (!anchoredZ.second && (dz == INVALID_HEIGHT || dz == VMAP_INVALID_HEIGHT_VALUE))
             return false;
 
         WorldPosition pos(bot->GetMapId(), dx, dy, dz);

@@ -6,6 +6,8 @@
 
 #include "NewRpgBaseAction.h"
 
+#include "QuestAnchor.h"
+
 #include <algorithm>
 #include "BroadcastHelper.h"
 #include "ChatHelper.h"
@@ -887,15 +889,29 @@ bool NewRpgBaseAction::GetQuestPOIPosAndObjectiveIdx(uint32 questId, std::vector
             if (bot->GetDistance2d(dx, dy) >= 1500.0f)
                 continue;
 
-            float dz = std::max(bot->GetMap()->GetHeight(dx, dy, MAX_HEIGHT), bot->GetMap()->GetWaterLevel(dx, dy));
+            // Prefer the real height of whoever takes this quest back. The POI is
+            // 2-D; guessing from terrain puts indoor turn-ins on the roof.
+            QuestAnchor::Anchor anchor;
+            bool anchored = sQuestAnchor.FindTurnInAnchor(questId, bot->GetMapId(), dx, dy, anchor);
 
-            if (dz == INVALID_HEIGHT || dz == VMAP_INVALID_HEIGHT_VALUE)
+            float dz = anchored
+                           ? anchor.z
+                           : std::max(bot->GetMap()->GetHeight(dx, dy, MAX_HEIGHT),
+                                      bot->GetMap()->GetWaterLevel(dx, dy));
+
+            if (!anchored && (dz == INVALID_HEIGHT || dz == VMAP_INVALID_HEIGHT_VALUE))
                 continue;
+
+            if (anchored)
+            {
+                dx = anchor.x;
+                dy = anchor.y;
+            }
 
             if (bot->GetZoneId() != bot->GetMap()->GetZoneId(bot->GetPhaseMask(), dx, dy, dz))
                 continue;
 
-            poiInfo.push_back({{dx, dy}, qPoi.ObjectiveIndex});
+            poiInfo.push_back({{dx, dy}, qPoi.ObjectiveIndex, dz, anchored});
         }
 
         if (poiInfo.empty())
@@ -959,15 +975,28 @@ bool NewRpgBaseAction::GetQuestPOIPosAndObjectiveIdx(uint32 questId, std::vector
         if (bot->GetDistance2d(dx, dy) >= 1500.0f)
             continue;
 
-        float dz = std::max(bot->GetMap()->GetHeight(dx, dy, MAX_HEIGHT), bot->GetMap()->GetWaterLevel(dx, dy));
+        // Same for objectives: anchor on a spawn of the creature the quest wants
+        // killed, so a mine objective targets the mine floor, not the hill on top.
+        QuestAnchor::Anchor anchor;
+        bool anchored = sQuestAnchor.FindObjectiveAnchor(quest, bot->GetMapId(), dx, dy, anchor);
 
-        if (dz == INVALID_HEIGHT || dz == VMAP_INVALID_HEIGHT_VALUE)
+        float dz = anchored ? anchor.z
+                            : std::max(bot->GetMap()->GetHeight(dx, dy, MAX_HEIGHT),
+                                       bot->GetMap()->GetWaterLevel(dx, dy));
+
+        if (!anchored && (dz == INVALID_HEIGHT || dz == VMAP_INVALID_HEIGHT_VALUE))
             continue;
+
+        if (anchored)
+        {
+            dx = anchor.x;
+            dy = anchor.y;
+        }
 
         if (bot->GetZoneId() != bot->GetMap()->GetZoneId(bot->GetPhaseMask(), dx, dy, dz))
             continue;
 
-        poiInfo.push_back({{dx, dy}, qPoi.ObjectiveIndex});
+        poiInfo.push_back({{dx, dy}, qPoi.ObjectiveIndex, dz, anchored});
     }
 
     if (poiInfo.size() == 0)

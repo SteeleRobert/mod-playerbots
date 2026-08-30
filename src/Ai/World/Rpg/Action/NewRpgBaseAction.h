@@ -22,6 +22,12 @@ struct POIInfo
 {
     G3D::Vector2 pos;
     int32 objectiveIdx;
+    // Height resolved from the entity the objective actually refers to (a mob
+    // spawn, the quest ender) rather than guessed from terrain. Quest POIs are
+    // 2-D, and a ray dropped from the sky lands on the roof above an inn or the
+    // hillside above a mine. See QuestAnchor.
+    float z{0.0f};
+    bool anchored{false};
 };
 
 /// A base (composition) class for all new rpg actions
