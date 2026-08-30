@@ -17,6 +17,7 @@
 #include "RandomPlayerbotMgr.h"
 #include "Talentspec.h"
 #include "TravelMgr.h"
+#include <algorithm>
 #include <cctype>
 #include <iostream>
 #include <sstream>
@@ -726,6 +727,78 @@ bool PlayerbotAIConfig::Initialize()
     autoTeleportForLevel = sConfigMgr->GetOption<bool>("AiPlayerbot.AutoTeleportForLevel", false);
     autoDoQuests = sConfigMgr->GetOption<bool>("AiPlayerbot.AutoDoQuests", true);
     enableNewRpgStrategy = sConfigMgr->GetOption<bool>("AiPlayerbot.EnableNewRpgStrategy", true);
+
+    // Slow (LLM) strategic layer - see conf for what each key does. Default OFF.
+    llmDirectiveEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.Enabled", false);
+    llmDirectiveBotNames.clear();
+    LoadListString<std::vector<std::string>>(
+        sConfigMgr->GetOption<std::string>("AiPlayerbot.LlmDirective.BotNames", ""), llmDirectiveBotNames);
+    llmDirectiveRandomBotPercent =
+        std::min<uint32>(100, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.RandomBotPercent", 0));
+    llmDirectiveIntervalSeconds =
+        std::max<uint32>(30, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.IntervalSeconds", 300));
+    llmDirectiveJitterSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.JitterSeconds", 60);
+    llmDirectiveUrl =
+        sConfigMgr->GetOption<std::string>("AiPlayerbot.LlmDirective.Url", "http://127.0.0.1:11434/api/generate");
+    llmDirectiveModel = sConfigMgr->GetOption<std::string>("AiPlayerbot.LlmDirective.Model", "llama3.1:8b");
+    // Sized to the reply we actually want, with headroom. Do not shrink this
+    // without checking reply_chars in the journal: a cap that truncates the JSON
+    // presents exactly like a parse bug.
+    llmDirectiveNumPredict =
+        std::max<uint32>(64, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.NumPredict", 512));
+    // Reasoning models answer in a separate "thinking" field and leave "response"
+    // empty, which reads downstream as an empty reply. Ask for the answer only.
+    llmDirectiveDisableThinking =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.DisableThinking", true);
+    // A directive is only consumed at the New RPG IDLE status roll. A bot already
+    // in DO_QUEST does not re-roll for up to 30 minutes, so without this most
+    // directives expire before the engine ever looks at them (measured: 44 of 45
+    // decisions reported "the engine never took it up").
+    llmDirectivePreempt = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.PreemptCurrentStatus", true);
+    // Mirror decisions and notable events into the tables the bot dashboard
+    // reads, so it can be fed without enabling mod-ollama-bot-buddy (which
+    // would clear the non-combat engine this layer steers). Only ever runs for
+    // bots already opted in to the LLM layer.
+    llmDirectiveDashboardTelemetry =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.DashboardTelemetry", true);
+    // Strip the liveness cheats the classical random-bot machinery relies on:
+    // teleporting instead of walking, free repair/heal/money/restock. An LLM bot
+    // that teleports out of a bad decision is not demonstrating anything.
+    llmDirectiveNoCheating = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.NoCheating", true);
+    // Ask again as soon as a directive is actually finished, rather than sitting
+    // idle until the interval expires. Finishing is the most informative moment
+    // to re-decide, and the model gets to see the outcome while it still matters.
+    llmDirectiveReactToCompletion =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.ReactToCompletion", true);
+    // Events that invalidate the current plan rather than complete it. Dying is
+    // the clear one: whatever the bot was told to do, it is now a corpse and the
+    // plan deserves revisiting rather than resuming.
+    llmDirectiveReactToInterrupts =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.ReactToInterrupts", true);
+    // Hard floor between two decisions for one bot, whatever triggers them. This
+    // is the safety rail on the above: a directive that completes the instant it
+    // is issued must not be able to turn one bot into a request loop.
+    llmDirectiveMinIntervalSeconds =
+        std::max<uint32>(5, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.MinIntervalSeconds", 30));
+    // "ollama" (default) or "openai". vLLM serves the OpenAI-compatible API, so
+    // that is what a vLLM deployment wants; the Url must then point at
+    // /v1/chat/completions rather than /api/generate.
+    {
+        std::string api = sConfigMgr->GetOption<std::string>("AiPlayerbot.LlmDirective.Api", "ollama");
+        std::transform(api.begin(), api.end(), api.begin(),
+                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        llmDirectiveOpenAiApi = (api == "openai" || api == "vllm");
+    }
+    llmDirectiveTemperature = sConfigMgr->GetOption<float>("AiPlayerbot.LlmDirective.Temperature", 0.2f);
+    llmDirectiveTimeoutSeconds =
+        std::max<uint32>(1, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.TimeoutSeconds", 60));
+    llmDirectiveMaxConcurrent = sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.MaxConcurrent", 8);
+    llmDirectiveHistorySize =
+        std::min<uint32>(12, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.HistorySize", 5));
+    llmDirectiveJournal = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.Journal", true);
+    llmDirectiveJournalAutoCreate =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.JournalAutoCreate", true);
+    llmDirectiveDebug = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.Debug", false);
 
     RpgStatusProbWeight[RPG_WANDER_RANDOM] = sConfigMgr->GetOption<int32>("AiPlayerbot.RpgStatusProbWeight.WanderRandom", 15);
     RpgStatusProbWeight[RPG_WANDER_NPC] = sConfigMgr->GetOption<int32>("AiPlayerbot.RpgStatusProbWeight.WanderNpc", 20);

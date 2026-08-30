@@ -1417,6 +1417,188 @@ AiPlayerbot.RpgStatusProbWeight.TravelFlight = 15
 AiPlayerbot.RpgStatusProbWeight.Rest = 5
 AiPlayerbot.RpgStatusProbWeight.OutdoorPvp = 10
 
+###################################################################################################
+# SLOW (LLM) STRATEGIC LAYER
+#
+# An opt-in second brain that runs about once every five minutes per bot and emits
+# ONE strategic intent: quest / grind / travel / turnin / vendor, optionally naming
+# a zone. Everything second-to-second - combat rotations, pathing, looting,
+# targeting, talking to NPCs - stays with the classical playerbot AI, which is what
+# actually executes the intent (the New RPG state machine gets the directive as a
+# first-refusal on its status roll).
+#
+# The LLM is never in the per-tick loop and never blocks the world thread: calls run
+# on detached worker threads and the reply is applied on a later tick. If the
+# endpoint is slow, down, or answers with something unparseable, the bot simply
+# behaves like a normal classical bot until the next decision.
+#
+# With Enabled = 0 (the default) no bot allocates, calls, or branches differently
+# anywhere - which is what makes an A/B comparison against classical bots valid.
+###################################################################################################
+
+# Master switch for the slow strategic layer.
+# Default: 0 (disabled)
+AiPlayerbot.LlmDirective.Enabled = 0
+
+# Comma-separated bot names that are ALWAYS driven by the slow layer. These need not
+# be random bots.
+# Default: "" (none)
+AiPlayerbot.LlmDirective.BotNames = ""
+
+# Additionally opt in this percentage of RANDOM bots, chosen deterministically from
+# the character GUID so the same bots stay in the same arm of an A/B run across
+# restarts. 0 disables. 100 puts every random bot under the slow layer.
+# Default: 0
+AiPlayerbot.LlmDirective.RandomBotPercent = 0
+
+# Maximum seconds between decisions for one bot. With ReactToCompletion and
+# ReactToInterrupts on (the defaults) this is a CEILING rather than a cadence:
+# most decisions are triggered by a directive finishing or by an interrupt, and
+# this is the backstop for directives that have no natural completion (grind,
+# vendor) or that quietly stall. Each bot's first decision is spread
+# randomly across one full interval, and every subsequent one adds JitterSeconds of
+# random spread, so fifty bots do not all fire in the same tick. Minimum 30.
+# Default: 300 (five minutes)
+AiPlayerbot.LlmDirective.IntervalSeconds = 300
+
+# Extra random spread added after each decision, in seconds.
+# Default: 60
+AiPlayerbot.LlmDirective.JitterSeconds = 60
+
+# Ollama-compatible generate endpoint. Must be reachable from the worldserver host.
+# On this deployment an Ollama-compatible shim listens on :11434.
+# Default: http://127.0.0.1:11434/api/generate
+# Which HTTP API the endpoint speaks.
+#   ollama  - Ollama's native /api/generate           (default)
+#   openai  - the OpenAI-compatible /v1/chat/completions, which is what vLLM
+#             serves. Also accepts the alias "vllm".
+# The Url below must match: /api/generate for ollama, /v1/chat/completions for
+# openai. On olab1 that is http://127.0.0.1:8123/v1/chat/completions.
+# Default: ollama
+AiPlayerbot.LlmDirective.Api = "ollama"
+
+AiPlayerbot.LlmDirective.Url = "http://127.0.0.1:11434/api/generate"
+
+# Model name passed to the endpoint.
+# Default: llama3.1:8b
+AiPlayerbot.LlmDirective.Model = "llama3.1:8b"
+
+# Token cap for the reply. DO NOT shrink this without first checking the
+# reply_chars column of playerbots_llm_directive_journal: a cap that truncates the
+# JSON looks exactly like a parse bug from the outside. A sibling feature shipped
+# with 128 and lost 97% of its replies that way. Minimum 64.
+# Default: 512
+AiPlayerbot.LlmDirective.NumPredict = 512
+
+# Send "think": false with each request. Reasoning models (qwen3.5, and any
+# Ollama model with the "thinking" capability) otherwise put the answer in a
+# separate `thinking` field and return an EMPTY `response`, which looks exactly
+# like the endpoint saying nothing. Measured on qwen3.5:4b. Leave this on unless
+# your endpoint rejects the field; the client also falls back to reading
+# `thinking` for endpoints that ignore it.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.DisableThinking = 1
+
+# When a new directive is accepted and the bot is doing something else, send it
+# back to the New RPG IDLE state so it re-rolls its status immediately and picks
+# the directive up. A directive is only ever consumed at that roll, and a bot in
+# DO_QUEST does not re-roll for up to 30 minutes - measured without this, 44 of 45
+# decisions expired reporting "the engine never took it up". Taxi flights, combat
+# and death are never interrupted. Turn off for a strictly hands-off layer.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.PreemptCurrentStatus = 1
+
+# Mirror each decision, and notable events (died / quest_done / leveled_up),
+# into the two tables the bot dashboard reads:
+#   mod_ollama_bot_buddy_journal   one row per decision + the prompt, which the
+#                                  dashboard also mines for live bot positions
+#   mod_ollama_chat_bot_events     positions, deaths, counters, journey replay
+# This exists so the dashboard can be fed WITHOUT enabling mod-ollama-bot-buddy,
+# which clears the non-combat engine every tick for the bots it drives - i.e. the
+# exact engine this layer steers. Tables are never created here; they belong to
+# those modules, and if absent these writes are skipped silently.
+# Only ever runs for bots already opted in to the LLM layer.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.DashboardTelemetry = 1
+
+# Strip the liveness cheats the classical random-bot machinery relies on, for
+# opted-in bots only:
+#   - MoveFarTo's teleport-when-stuck recovery. An honest bot that cannot walk to
+#     a destination abandons it and picks another, rather than blinking there.
+#   - RandomTeleport in all its forms: the periodic hub relocation, the grind
+#     relocation, the level-up relocation and the post-death relocation.
+#   - Refresh's free durability repair, full heal, mana/energy refill, consumable
+#     restock and pocket-money grant.
+# The post-death resurrect is deliberately kept: nothing else revives a random
+# bot, so removing it would just leave corpses lying around forever.
+# This matters for honest measurement - a bot that teleports out of a bad
+# destination makes the strategic layer that chose it look better than it is.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.NoCheating = 1
+
+# Ask the model again as soon as a directive is actually FINISHED, instead of
+# waiting out IntervalSeconds. Completion is the most informative moment to
+# re-decide - the bot has just turned a quest in, or arrived somewhere - and the
+# model gets to react while the outcome still matters.
+# Recognised completions: a named quest whose objectives are done ("quest"), a
+# named quest that has left the log ("turnin"), no complete quests remaining
+# ("turnin" with no quest named), arrival in the target zone ("travel").
+# A directive that merely EXPIRED does not count - that is a timeout, not an
+# achievement, and reacting to it would turn a dead endpoint into a retry storm.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.ReactToCompletion = 1
+
+# Also re-decide when something INVALIDATES the current plan rather than
+# completing it. Currently that means dying: whatever the bot was told to do, it
+# is now a corpse, and resuming the old plan is rarely the right answer. The
+# decision is held until the bot is back on its feet - a corpse is not asked what
+# it wants to do next.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.ReactToInterrupts = 1
+
+# Hard floor in seconds between two decisions for the same bot, whatever triggers
+# them. This is the safety rail on ReactToCompletion: a directive that completes
+# the instant it is issued must not be able to turn one bot into a request loop.
+# Minimum 5.
+# Default: 30
+AiPlayerbot.LlmDirective.MinIntervalSeconds = 30
+
+# Sampling temperature. This is a classification task; keep it low.
+# Default: 0.2
+AiPlayerbot.LlmDirective.Temperature = 0.2
+
+# Per-request HTTP timeout, seconds. A timed-out call is a failure: the bot falls
+# back to classical behaviour and the failure is journalled.
+# Default: 60
+AiPlayerbot.LlmDirective.TimeoutSeconds = 60
+
+# Maximum simultaneous in-flight requests across ALL bots. At one call per bot per
+# five minutes, fifty bots produce ~10 calls/minute, so this only matters when the
+# endpoint is slow. 0 = unlimited.
+# Default: 8
+AiPlayerbot.LlmDirective.MaxConcurrent = 8
+
+# How many previous decisions (with their real outcomes) are shown back to the model
+# so it can course-correct. Capped at 12.
+# Default: 5
+AiPlayerbot.LlmDirective.HistorySize = 5
+
+# Write every call - prompt, raw reply, latency, parse outcome, model - to
+# playerbots_llm_directive_journal in the playerbots database. Leave this on: it is
+# the only way to tell a truncated reply from a bad one.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.Journal = 1
+
+# Issue CREATE TABLE IF NOT EXISTS for the journal table on first use. The same DDL
+# also ships as data/sql/playerbots/updates/*.sql; this covers servers whose SQL
+# updater is disabled.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.JournalAutoCreate = 1
+
+# Log every accepted directive at INFO level.
+# Default: 0 (disabled)
+AiPlayerbot.LlmDirective.Debug = 0
+
 # Bots' minimum and maximum level when teleporting in and out of a zone, according to the new RPG strategy
 # Format: AiPlayerbot.ZoneBracket.zoneID = minLevel,maxLevel
 #

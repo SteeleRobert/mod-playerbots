@@ -1574,6 +1574,12 @@ void RandomPlayerbotMgr::Revive(Player* player)
 
 void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>& locs, bool hearth)
 {
+    // Every hub / grind / level / revive relocation funnels through here, so this
+    // is the single place that stops an honest bot being moved by an invisible
+    // hand. It walks or it stays put.
+    if (PlayerbotLongTermAI::IsHonestBot(bot))
+        return;
+
     // ignore when alrdy teleported or not in the world yet.
     if (bot->IsBeingTeleported() || !bot->IsInWorld())
         return;
@@ -2090,20 +2096,32 @@ void RandomPlayerbotMgr::Refresh(Player* bot)
 
     botAI->Reset();
 
-    bot->DurabilityRepairAll(false, 1.0f, false);
-    bot->SetFullHealth();
+    // Free repair, a full heal, restocked consumables and pocket money out of thin
+    // air. An honest bot earns its gold, walks to a vendor, and eats what it has.
+    // The resurrect above is deliberately kept: without it a dead bot never gets
+    // up again, since nothing else revives random bots.
+    bool const honest = PlayerbotLongTermAI::IsHonestBot(bot);
+
+    if (!honest)
+    {
+        bot->DurabilityRepairAll(false, 1.0f, false);
+        bot->SetFullHealth();
+    }
     bot->SetPvP(sWorld->IsPvPRealm());
-    PlayerbotFactory factory(bot, bot->GetLevel());
-    factory.Refresh();
+    if (!honest)
+    {
+        PlayerbotFactory factory(bot, bot->GetLevel());
+        factory.Refresh();
 
-    if (bot->GetMaxPower(POWER_MANA) > 0)
-        bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
+        if (bot->GetMaxPower(POWER_MANA) > 0)
+            bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
 
-    if (bot->GetMaxPower(POWER_ENERGY) > 0)
-        bot->SetPower(POWER_ENERGY, bot->GetMaxPower(POWER_ENERGY));
+        if (bot->GetMaxPower(POWER_ENERGY) > 0)
+            bot->SetPower(POWER_ENERGY, bot->GetMaxPower(POWER_ENERGY));
 
-    uint32 money = bot->GetMoney();
-    bot->SetMoney(money + 500 * sqrt(urand(1, bot->GetLevel() * 5)));
+        uint32 money = bot->GetMoney();
+        bot->SetMoney(money + 500 * sqrt(urand(1, bot->GetLevel() * 5)));
+    }
 
     if (bot->GetGroup())
         botAI->LeaveOrDisbandGroup();

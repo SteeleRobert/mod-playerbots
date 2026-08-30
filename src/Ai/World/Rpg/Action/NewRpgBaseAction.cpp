@@ -5,6 +5,8 @@
  */
 
 #include "NewRpgBaseAction.h"
+
+#include <algorithm>
 #include "BroadcastHelper.h"
 #include "ChatHelper.h"
 #include "Creature.h"
@@ -23,6 +25,7 @@
 #include "PathGenerator.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
+#include "LongTerm/LlmTelemetry.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
@@ -101,6 +104,28 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
         // its RPG objective instead of oscillating indefinitely.
         botAI->rpgInfo.stuckTs = getMSTime();
         botAI->rpgInfo.stuckAttempts = 0;
+
+        // Honest bots do not teleport out of a pathfinding failure. If the
+        // destination cannot be walked to, that is a fact about the world and the
+        // bot should pick a different objective - which is exactly what returning
+        // to IDLE makes it do on the next tick. Teleporting here would quietly
+        // paper over every bad destination the strategic layer ever chooses, and
+        // make its decisions look better than they are.
+        if (PlayerbotLongTermAI::IsHonestBot(bot))
+        {
+            LOG_DEBUG("playerbots", "[New RPG] Bot {} could not walk to its destination; abandoning it "
+                                    "(no-cheat mode) instead of teleporting",
+                      bot->GetName());
+            // Recorded rather than only logged: this is the one place an honest bot
+            // visibly fails at something the cheating bot papers over, so it needs
+            // to be countable. It also drives the dashboard's stuck panel.
+            LlmTelemetry::RecordEvent(bot, LlmTelemetry::EVENT_STUCK,
+                                      "{\"abandoned_destination\":true}");
+            botAI->rpgInfo.nearestMoveFarDis = FLT_MAX;
+            botAI->rpgInfo.ChangeToIdle();
+            return false;
+        }
+
         const AreaTableEntry* entry = sAreaTableStore.LookupEntry(bot->GetZoneId());
         std::string zone_name = PlayerbotAI::GetLocalizedAreaName(entry);
         LOG_DEBUG(
@@ -1073,8 +1098,48 @@ bool NewRpgBaseAction::SelectRandomFlightTaxiNode(uint32& flightMasterEntry, Wor
     return true;
 }
 
+bool NewRpgBaseAction::SelectFlightTaxiNodeToZone(uint32 zoneId, uint32& flightMasterEntry,
+                                                 WorldPosition& flightMasterPos, std::vector<uint32>& path)
+{
+    TravelMgr::FlightMasterInfo const* info = sTravelMgr.GetNearestFlightMasterInfo(bot);
+    if (!info)
+        return false;
+
+    path = sTravelMgr.GetFlightPathToZone(bot, zoneId);
+    if (path.empty())
+        return false;
+
+    flightMasterEntry = info->templateEntry;
+    flightMasterPos = info->pos;
+    return true;
+}
+
 bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateStatus)
 {
+    // Slow (LLM) strategic layer: a bot holding a directive gets first refusal on
+    // the status roll. Everything below this block is untouched, so with the
+    // feature off - the default, and the A/B baseline - the roll runs exactly as
+    // it always has. If none of the preferred statuses is available or enterable,
+    // we fall straight through to the normal weighted roll.
+    if (sPlayerbotAIConfig.llmDirectiveEnabled)
+    {
+        if (PlayerbotLongTermAI* longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot))
+        {
+            for (NewRpgStatus preferred : longTermAI->GetPreferredRpgStatuses())
+            {
+                if (!CheckRpgStatusAvailable(preferred))
+                    continue;
+                if (!ApplyRpgStatus(preferred))
+                    continue;
+
+                longTermAI->NoteDirectiveApplied(preferred);
+                LOG_DEBUG("playerbots", "[LlmDirective] Bot {} entered status {} for directive {}",
+                          bot->GetName(), uint32(preferred), longTermAI->GetDirective().Describe());
+                return true;
+            }
+        }
+    }
+
     std::vector<NewRpgStatus> availableStatus;
     uint32 probSum = 0;
     for (NewRpgStatus status : candidateStatus)
@@ -1108,6 +1173,11 @@ bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateSta
         }
     }
 
+    return ApplyRpgStatus(chosenStatus);
+}
+
+bool NewRpgBaseAction::ApplyRpgStatus(NewRpgStatus chosenStatus)
+{
     switch (chosenStatus)
     {
         case RPG_WANDER_RANDOM:
@@ -1142,7 +1212,19 @@ bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateSta
         }
         case RPG_DO_QUEST:
         {
+            // A "turnin" directive means: of the quests you could work on, go and
+            // hand in the finished ones first. Decided once, up front, so that with
+            // the feature off the loop below does no work the classical path did not
+            // already do - no extra lookup per quest, no allocation.
+            bool wantsCompletedFirst = false;
+            if (sPlayerbotAIConfig.llmDirectiveEnabled)
+            {
+                PlayerbotLongTermAI* longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot);
+                wantsCompletedFirst = longTermAI && longTermAI->PrefersCompletedQuests();
+            }
+
             std::vector<uint32> availableQuests;
+            std::vector<uint32> completeQuests;
             for (uint8 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
             {
                 uint32 questId = bot->GetQuestSlotQuestId(slot);
@@ -1153,11 +1235,36 @@ bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateSta
                 if (GetQuestPOIPosAndObjectiveIdx(questId, poiInfo, true))
                 {
                     availableQuests.push_back(questId);
+                    if (wantsCompletedFirst && bot->GetQuestStatus(questId) == QUEST_STATUS_COMPLETE)
+                        completeQuests.push_back(questId);
                 }
             }
+            // If none of the finished quests has usable POI data the normal uniform
+            // pick still applies, so the bot never stalls waiting to turn in.
+            if (!completeQuests.empty())
+                availableQuests = completeQuests;
+
             if (availableQuests.size())
             {
-                uint32 questId = availableQuests[urand(0, availableQuests.size() - 1)];
+                // The strategic layer may name the quest. Honoured only when that
+                // quest is genuinely workable right now (in the log, not blacklisted,
+                // with POI data on this map and zone) - otherwise the engine's own
+                // uniform pick stands, which is strictly better than chasing a quest
+                // the bot cannot make progress on.
+                uint32 questId = 0;
+                if (sPlayerbotAIConfig.llmDirectiveEnabled)
+                {
+                    PlayerbotLongTermAI* longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot);
+                    uint32 const chosen = longTermAI ? longTermAI->GetDirectiveQuestId() : 0;
+                    if (chosen && std::find(availableQuests.begin(), availableQuests.end(), chosen) !=
+                                      availableQuests.end())
+                    {
+                        questId = chosen;
+                    }
+                }
+
+                if (!questId)
+                    questId = availableQuests[urand(0, availableQuests.size() - 1)];
                 const Quest* quest = sObjectMgr->GetQuestTemplate(questId);
                 if (quest)
                 {
@@ -1172,6 +1279,22 @@ bool NewRpgBaseAction::RandomChangeStatus(std::vector<NewRpgStatus> candidateSta
             uint32 flightMasterEntry = 0;
             WorldPosition flightMasterPos;
             std::vector<uint32> path;
+
+            // A directive that names a zone turns the random taxi hop into a
+            // targeted one. When no route into that zone exists we fall back to the
+            // ordinary random destination rather than refusing to fly at all.
+            if (sPlayerbotAIConfig.llmDirectiveEnabled)
+            {
+                PlayerbotLongTermAI* longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot);
+                uint32 const targetZone = longTermAI ? longTermAI->GetDirectiveZoneId() : 0;
+                if (targetZone && targetZone != bot->GetZoneId() &&
+                    SelectFlightTaxiNodeToZone(targetZone, flightMasterEntry, flightMasterPos, path))
+                {
+                    botAI->rpgInfo.ChangeToTravelFlight(flightMasterEntry, flightMasterPos, path);
+                    return true;
+                }
+            }
+
             if (SelectRandomFlightTaxiNode(flightMasterEntry, flightMasterPos, path))
             {
                 botAI->rpgInfo.ChangeToTravelFlight(flightMasterEntry, flightMasterPos, path);
