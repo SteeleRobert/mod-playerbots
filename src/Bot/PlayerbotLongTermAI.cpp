@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <sstream>
+#include <variant>
 
 using json = nlohmann::json;
 
@@ -524,7 +525,27 @@ void PlayerbotLongTermAI::ConsumeReply(LlmReply const& reply)
                 bool const busyUninterruptible =
                     current == RPG_TRAVEL_FLIGHT || bot->IsInCombat() || !bot->IsAlive();
 
-                if (!alreadyDoingIt && !busyUninterruptible)
+                // A bot parked at a quest POI is running the engine's own stall
+                // timer: five minutes there with no progress and it blacklists the
+                // quest and moves on. That timer is the ONLY escape from objectives
+                // this engine cannot detect progress on - exploration, use-item and
+                // reputation objectives never register - and ChangeToIdle resets it.
+                //
+                // With IntervalSeconds and poiStayTime both 300s we were resetting
+                // it at almost exactly the moment it would have fired, so a bot could
+                // sit at a dead objective forever. Measured on olab1: one bot spent
+                // 33 minutes inside a 25-yard box in a mine, zero xp, zero kills,
+                // re-issued the same directive seven times.
+                //
+                // So leave a parked bot alone. The directive still lands - at the
+                // next roll, which is exactly what the stall timer triggers.
+                bool parkedAtQuestPoi = false;
+                if (current == RPG_DO_QUEST)
+                    if (NewRpgInfo::DoQuest const* dq =
+                            std::get_if<NewRpgInfo::DoQuest>(&botAI->rpgInfo.data))
+                        parkedAtQuestPoi = dq->lastReachPOI != 0;
+
+                if (!alreadyDoingIt && !busyUninterruptible && !parkedAtQuestPoi)
                     botAI->rpgInfo.ChangeToIdle();
             }
         }

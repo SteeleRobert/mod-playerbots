@@ -1504,7 +1504,10 @@ AiPlayerbot.LlmDirective.DisableThinking = 1
 # the directive up. A directive is only ever consumed at that roll, and a bot in
 # DO_QUEST does not re-roll for up to 30 minutes - measured without this, 44 of 45
 # decisions expired reporting "the engine never took it up". Taxi flights, combat
-# and death are never interrupted. Turn off for a strictly hands-off layer.
+# and death are never interrupted, and neither is a bot already parked at a quest
+# objective - that would reset the engine's own five-minute stall timer, which is
+# the only thing that rescues a bot from an objective it cannot make progress on.
+# Turn off for a strictly hands-off layer.
 # Default: 1 (enabled)
 AiPlayerbot.LlmDirective.PreemptCurrentStatus = 1
 
