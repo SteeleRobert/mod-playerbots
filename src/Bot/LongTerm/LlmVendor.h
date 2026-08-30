@@ -16,6 +16,7 @@
 
 class Player;
 class PlayerbotAI;
+class Item;
 
 struct LlmVendorItem
 {
@@ -39,7 +40,7 @@ namespace LlmVendor
                             uint32& repairCost);
     bool Parse(std::string const& raw, std::vector<LlmVendorItem> const& offered, bool repairOffered,
                LlmVendorPlan& out, std::string& error);
-    bool IsSellAllowed(ItemUsage usage);
+    bool IsSellAllowed(Player* bot, Item* item, ItemUsage usage);
 }
 
 #endif

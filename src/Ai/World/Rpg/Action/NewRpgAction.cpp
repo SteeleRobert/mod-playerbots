@@ -416,7 +416,7 @@ bool NewRpgVendorAction::Execute(Event /*event*/)
         // sending the real CMSG_SELL_ITEM packet.
         ItemUsage const usage = botAI->GetAiObjectContext()
                                     ->GetValue<ItemUsage>("item usage", item->GetEntry())->Get();
-        if (!LlmVendor::IsSellAllowed(usage))
+        if (!LlmVendor::IsSellAllowed(bot, item, usage))
             continue;
         sell.Sell(item);
         ++sold;

@@ -11,13 +11,12 @@
 #include "Player.h"
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
+#include "RandomItemMgr.h"
 #include "StatsWeightCalculator.h"
 
 #include <nlohmann/json.hpp>
 
 #include <sstream>
-#include <unordered_map>
-#include <unordered_set>
 
 namespace
 {
@@ -55,6 +54,22 @@ namespace
         return out;
     }
 
+    bool IsNeutralEquipmentSlot(uint32 inventoryType)
+    {
+        switch (inventoryType)
+        {
+            case INVTYPE_NECK:
+            case INVTYPE_CLOAK:
+            case INVTYPE_FINGER:
+            case INVTYPE_TRINKET:
+            case INVTYPE_HOLDABLE:
+            case INVTYPE_RELIC:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     void AppendItem(Player* bot, PlayerbotAI* botAI, Item* item, StatsWeightCalculator& calculator,
                     std::ostringstream& prompt, std::vector<LlmVendorItem>& offered)
     {
@@ -66,13 +81,14 @@ namespace
                                     ->GetValue<ItemUsage>("item usage", item->GetEntry())->Get();
         std::string const token = "b" + std::to_string(item->GetBagSlot()) + "s" +
                                   std::to_string(item->GetSlot());
-        bool const sellAllowed = LlmVendor::IsSellAllowed(usage);
+        bool const sellAllowed = LlmVendor::IsSellAllowed(bot, item, usage);
 
         offered.push_back({token, item->GetGUID(), usage, sellAllowed});
         prompt << "- " << token << ": item_id=" << item->GetEntry()
                << ", name=" << Sanitized(proto->Name1)
                << ", count=" << item->GetCount()
                << ", quality=" << uint32(proto->Quality)
+               << ", required_level=" << proto->RequiredLevel
                << ", usage=" << UsageName(usage)
                << ", spec_score=" << calculator.CalculateItem(
                       proto->ItemId, item->GetInt32Value(ITEM_FIELD_RANDOM_PROPERTIES_ID))
@@ -84,14 +100,41 @@ namespace
 
 namespace LlmVendor
 {
-    bool IsSellAllowed(ItemUsage usage)
+    bool IsSellAllowed(Player* bot, Item* item, ItemUsage usage)
     {
-        // QUEST and KEEP are deliberately not merely discouraged: they never enter
-        // the executable set. Upgrades, consumables, profession goods and ammo are
-        // protected the same way. A false negative costs one bag slot; a false
-        // positive destroys an item.
-        return usage == ITEM_USAGE_VENDOR || usage == ITEM_USAGE_AH ||
-               usage == ITEM_USAGE_DISENCHANT || usage == ITEM_USAGE_BAD_EQUIP;
+        if (!bot || !item || !item->GetTemplate() || !item->GetTemplate()->SellPrice)
+            return false;
+
+        // Until professions and the AH exist, all saleable non-quest inventory is
+        // vendor fodder except equipment this class can use now or after levelling.
+        // Quest protection is absolute even when an item would otherwise look like
+        // ordinary trade goods.
+        if (usage == ITEM_USAGE_QUEST)
+            return false;
+
+        ItemTemplate const* proto = item->GetTemplate();
+        if (proto->Class == ITEM_CLASS_WEAPON &&
+            sRandomItemMgr.CanEquipWeapon(proto, bot->getClass()))
+            return false;
+
+        if (proto->Class == ITEM_CLASS_ARMOR)
+        {
+            bool const classAllowed = (proto->AllowableClass & bot->getClassMask()) != 0;
+            bool const usableArmor =
+                sRandomItemMgr.CanEquipArmor(proto, bot->getClass(), bot->GetLevel()) ||
+                sRandomItemMgr.CanEquipArmor(proto, bot->getClass(), DEFAULT_MAX_LEVEL) ||
+                (classAllowed && IsNeutralEquipmentSlot(proto->InventoryType));
+            if (usableArmor)
+                return false;
+        }
+
+        // ItemUsage knows about currently usable bags and unusual equippables that
+        // are not represented by the normal weapon/armor class checks.
+        if (usage == ITEM_USAGE_EQUIP || usage == ITEM_USAGE_REPLACE ||
+            usage == ITEM_USAGE_BAD_EQUIP || usage == ITEM_USAGE_BROKEN_EQUIP)
+            return false;
+
+        return true;
     }
 
     std::string BuildPrompt(Player* bot, PlayerbotAI* botAI, std::vector<LlmVendorItem>& offered,
@@ -107,15 +150,15 @@ namespace LlmVendor
         std::ostringstream prompt;
         prompt << "You are the vendor agent for one World of Warcraft bot. The strategic agent has already "
                   "decided to visit town; the classical engine is walking to the nearest real vendor. Decide "
-                  "only the trade actions to perform on arrival. Be conservative: preserve plausible upgrades "
-                  "and future-spec gear. Free bag space is useful, and ordinary vendor trash should normally go.\n\n"
+                  "only repair and restock on arrival. Professions and the auction house are not implemented. "
+                  "The engine has already marked every saleable non-quest, non-usable-gear item for sale.\n\n"
                << "Bot: level=" << uint32(bot->GetLevel()) << ", class=" << uint32(bot->getClass())
                << ", money_copper=" << bot->GetMoney()
                << ", free_bag_slots=" << bot->GetFreeInventorySpace()
                << ", durability_percent=" << uint32(durability)
                << ", repair_cost_copper=" << repairCost
                << ", repair_affordable=" << (repairCost && repairCost <= bot->GetMoney() ? "yes" : "no")
-               << "\n\nBag items (tokens are the only legal values in sell):\n";
+               << "\n\nBag items (sell_allowed is determined mechanically):\n";
 
         StatsWeightCalculator calculator(bot);
         calculator.SetItemSetBonus(false);
@@ -134,9 +177,9 @@ namespace LlmVendor
         }
 
         prompt << "\nReturn exactly one JSON object and no prose, with exactly these fields:\n"
-                  "{\"sell\":[\"b0s23\"],\"repair\":true,\"restock\":true,\"reason\":\"brief reason\"}\n"
-                  "sell must contain only tokens marked sell_allowed=yes. Never sell QUEST or KEEP items. "
-                  "Use [] when uncertain. repair may be true only when repair_affordable=yes. restock means "
+                  "{\"sell_all_allowed\":true,\"repair\":true,\"restock\":true,\"reason\":\"brief reason\"}\n"
+                  "sell_all_allowed must be true; the engine owns the protected-item rules. "
+                  "repair may be true only when repair_affordable=yes. restock means "
                   "use the existing vendor-buy logic for useful food, ammo, consumables, or upgrades; it may "
                   "still buy nothing. All four fields are required.";
         return prompt.str();
@@ -171,37 +214,19 @@ namespace LlmVendor
             return false;
         }
 
-        if (!doc.is_object() || doc.size() != 4 || !doc.contains("sell") || !doc["sell"].is_array() ||
+        if (!doc.is_object() || doc.size() != 4 || !doc.contains("sell_all_allowed") ||
+            !doc["sell_all_allowed"].is_boolean() || !doc["sell_all_allowed"].get<bool>() ||
             !doc.contains("repair") || !doc["repair"].is_boolean() ||
             !doc.contains("restock") || !doc["restock"].is_boolean() ||
             !doc.contains("reason") || !doc["reason"].is_string())
         {
-            error = "reply must contain exactly sell(array), repair(bool), restock(bool), reason(string)";
+            error = "reply must contain exactly sell_all_allowed(true), repair(bool), restock(bool), reason(string)";
             return false;
         }
 
-        std::unordered_map<std::string, LlmVendorItem const*> legal;
         for (LlmVendorItem const& item : offered)
-            legal[item.token] = &item;
-
-        std::unordered_set<std::string> seen;
-        for (nlohmann::json const& value : doc["sell"])
-        {
-            if (!value.is_string())
-            {
-                error = "every sell entry must be a string token";
-                return false;
-            }
-            std::string const token = value.get<std::string>();
-            auto const it = legal.find(token);
-            if (it == legal.end() || !it->second->sellAllowed || !IsSellAllowed(it->second->usage))
-            {
-                error = "sell token '" + token.substr(0, 24) + "' is not in the offered sellable set";
-                return false;
-            }
-            if (seen.insert(token).second)
-                out.sell.push_back(it->second->guid);
-        }
+            if (item.sellAllowed)
+                out.sell.push_back(item.guid);
 
         out.repair = doc["repair"].get<bool>();
         if (out.repair && !repairOffered)
