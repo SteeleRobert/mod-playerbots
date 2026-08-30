@@ -25,6 +25,7 @@
 struct LlmReply
 {
     ObjectGuid guid;
+    std::string agentId;
     std::string prompt;
     std::string raw;      // the model's own text, unwrapped from the API envelope
     std::string error;    // transport/endpoint failure; empty on success
@@ -35,10 +36,10 @@ namespace LlmClient
 {
     // Returns false when the global in-flight cap is reached, i.e. the caller must
     // try again next tick rather than pile another socket onto a slow endpoint.
-    bool Dispatch(ObjectGuid guid, std::string const& prompt);
+    bool Dispatch(ObjectGuid guid, std::string const& agentId, std::string const& prompt);
 
     // World thread: hand back this bot's finished reply, if any.
-    bool TakeReply(ObjectGuid guid, LlmReply& out);
+    bool TakeReply(ObjectGuid guid, std::string const& agentId, LlmReply& out);
 
     // Bot logged out / was destroyed: throw away anything already queued for it.
     void DropPending(ObjectGuid guid);

@@ -119,4 +119,11 @@ public:
     bool Execute(Event event) override;
 };
 
+class NewRpgVendorAction : public NewRpgBaseAction
+{
+public:
+    NewRpgVendorAction(PlayerbotAI* botAI) : NewRpgBaseAction(botAI, "new rpg vendor") {}
+    bool Execute(Event event) override;
+};
+
 #endif

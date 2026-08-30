@@ -71,7 +71,9 @@ enum NewRpgStatus : int
     // Taking a break
     RPG_REST = 7,
     RPG_OUTDOOR_PVP = 8,
-    RPG_STATUS_END = 9
+    // Entered only by the LLM vendor handoff; never part of the classical roll.
+    RPG_VENDOR = 9,
+    RPG_STATUS_END = 10
 };
 
 #define MAX_SPECNO 20

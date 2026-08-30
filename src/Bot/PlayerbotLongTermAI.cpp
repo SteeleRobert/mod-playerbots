@@ -13,6 +13,8 @@ using json = nlohmann::json;
 
 namespace
 {
+    constexpr char const* STRATEGIC_AGENT_ID = "strategic";
+    constexpr char const* VENDOR_AGENT_ID = "vendor";
     // Parser/transport messages can carry the offending JSON, braces included, and
     // the log sink runs its own format pass over the finished message.
     std::string LogSafe(std::string const& in)
@@ -126,6 +128,67 @@ void PlayerbotLongTermAI::NoteDirectiveApplied(NewRpgStatus /*status*/)
     ++_directiveApplyCount;
 }
 
+bool PlayerbotLongTermAI::BeginVendorHandoff()
+{
+    if (!_directive.IsActive() || _directive.action != LlmDirectiveAction::VENDOR)
+        return false;
+    if (_vendorHandoff)
+        return true;
+    // A canceled vendor worker still has to be drained and journalled. Do not
+    // create a second request with the same agent key until that has happened.
+    if (_vendorPending)
+        return false;
+
+    uint32 repairCost = 0;
+    std::vector<LlmVendorItem> offered;
+    std::string prompt = LlmVendor::BuildPrompt(bot, PlayerbotsMgr::instance().GetPlayerbotAI(bot),
+                                                offered, repairCost);
+    if (prompt.empty() || !LlmClient::Dispatch(bot->GetGUID(), VENDOR_AGENT_ID, prompt))
+        return false;
+
+    _vendorHandoff = true;
+    _vendorPending = true;
+    _vendorPlanReady = false;
+    _vendorRepairOffered = repairCost > 0 && repairCost <= bot->GetMoney();
+    _vendorPrompt = std::move(prompt);
+    _vendorItems = std::move(offered);
+    _vendorPlan = LlmVendorPlan();
+    return true;
+}
+
+bool PlayerbotLongTermAI::IsVendorHandoffActive() const
+{
+    return _vendorHandoff && _directive.IsActive() && _directive.action == LlmDirectiveAction::VENDOR;
+}
+
+bool PlayerbotLongTermAI::GetVendorPlan(LlmVendorPlan& out) const
+{
+    if (!IsVendorHandoffActive() || !_vendorPlanReady)
+        return false;
+    out = _vendorPlan;
+    return true;
+}
+
+void PlayerbotLongTermAI::CompleteVendorHandoff(std::string const& outcome)
+{
+    if (!IsVendorHandoffActive())
+        return;
+
+    _vendorHandoff = false;
+    _vendorPlanReady = false;
+    _vendorRepairOffered = false;
+    // Normally the reply has already been consumed. If a timeout canceled an
+    // unusually slow request, retain its evidence until it arrives so every LLM
+    // call is still journalled; the agent key prevents it colliding with strategy.
+    if (!_vendorPending)
+    {
+        _vendorPrompt.clear();
+        _vendorItems.clear();
+    }
+    _vendorPlan = LlmVendorPlan();
+    RetireDirective("vendor service complete: " + outcome);
+}
+
 std::vector<NewRpgStatus> PlayerbotLongTermAI::GetPreferredRpgStatuses()
 {
     std::vector<NewRpgStatus> preferred;
@@ -154,9 +217,9 @@ std::vector<NewRpgStatus> PlayerbotLongTermAI::GetPreferredRpgStatuses()
             preferred.push_back(RPG_WANDER_RANDOM);
             break;
         case LlmDirectiveAction::VENDOR:
-            // New RPG has no vendor/repair behaviour of its own; the closest honest
-            // execution is "go stand in a town hub", which is where the vendors,
-            // repair NPCs and quest givers all are.
+            // The strategic half gets the bot to a town hub. On arrival GO_CAMP
+            // explicitly hands off to the separately prompted vendor agent and
+            // the classical RPG_VENDOR execution state.
             preferred.push_back(RPG_GO_CAMP);
             preferred.push_back(RPG_WANDER_NPC);
             break;
@@ -236,8 +299,15 @@ void PlayerbotLongTermAI::UpdateAI(uint32 /*elapsed*/, bool /*minimal*/)
     if (_pending)
     {
         LlmReply reply;
-        if (LlmClient::TakeReply(bot->GetGUID(), reply))
+        if (LlmClient::TakeReply(bot->GetGUID(), STRATEGIC_AGENT_ID, reply))
             ConsumeReply(reply);
+    }
+
+    if (_vendorPending)
+    {
+        LlmReply reply;
+        if (LlmClient::TakeReply(bot->GetGUID(), VENDOR_AGENT_ID, reply))
+            ConsumeVendorReply(reply);
     }
 
     CheckDirectiveCompletion();
@@ -265,7 +335,7 @@ void PlayerbotLongTermAI::UpdateAI(uint32 /*elapsed*/, bool /*minimal*/)
         return;
     }
 
-    if (_pending || now < _nextDecisionMs)
+    if (_pending || _vendorHandoff || now < _nextDecisionMs)
         return;
 
     // Asking a corpse what it wants to do for the next five minutes wastes a call;
@@ -279,6 +349,59 @@ void PlayerbotLongTermAI::UpdateAI(uint32 /*elapsed*/, bool /*minimal*/)
     RequestDecision(now);
 }
 
+void PlayerbotLongTermAI::ConsumeVendorReply(LlmReply const& reply)
+{
+    _vendorPending = false;
+
+    LlmJournalRecord record;
+    record.botGuid = bot->GetGUID();
+    record.botName = bot->GetName();
+    record.botLevel = bot->GetLevel();
+    record.botClass = bot->getClass();
+    record.zoneId = bot->GetZoneId();
+    record.model = sPlayerbotAIConfig.llmDirectiveModel;
+    record.endpoint = sPlayerbotAIConfig.llmDirectiveUrl;
+    record.numPredict = sPlayerbotAIConfig.llmDirectiveNumPredict;
+    record.prompt = _vendorPrompt;
+    record.reply = reply.raw;
+    record.replyChars = static_cast<uint32>(reply.raw.size());
+    record.latencyMs = reply.latencyMs;
+    record.action = "vendor-service";
+    record.prevDirective = _directive.Describe();
+
+    std::string error = reply.error;
+    LlmVendorPlan parsed;
+    if (error.empty() && !LlmVendor::Parse(reply.raw, _vendorItems, _vendorRepairOffered, parsed, error))
+    {
+        // A rejected plan becomes a ready no-op plan. This lets the classical
+        // action leave the vendor cleanly without guessing at destructive work.
+    }
+
+    record.parseOk = error.empty();
+    record.parseError = error;
+    if (record.parseOk)
+    {
+        _vendorPlan = std::move(parsed);
+        record.reason = _vendorPlan.reason;
+    }
+    else
+    {
+        _vendorPlan = LlmVendorPlan();
+        LOG_WARN("playerbots", "[LlmVendor] {} rejected reply ({} chars, {}ms): {}", bot->GetName(),
+                 record.replyChars, reply.latencyMs, LogSafe(error));
+    }
+    _vendorPlanReady = _vendorHandoff;
+
+    if (sPlayerbotAIConfig.llmDirectiveJournal)
+        LlmJournal::Write(record);
+    LlmTelemetry::WriteDecision(bot, record.parseOk ? "vendor-service" : "vendor-rejected", "{}",
+                                record.reason, record.parseOk, record.parseOk ? "plan accepted" : error,
+                                record.latencyMs, record.prompt, record.reply);
+
+    _vendorPrompt.clear();
+    _vendorItems.clear();
+}
+
 void PlayerbotLongTermAI::RequestDecision(uint32 now)
 {
     std::vector<LlmZoneChoice> zones;
@@ -290,7 +413,7 @@ void PlayerbotLongTermAI::RequestDecision(uint32 now)
         return;
     }
 
-    if (!LlmClient::Dispatch(bot->GetGUID(), prompt))
+    if (!LlmClient::Dispatch(bot->GetGUID(), STRATEGIC_AGENT_ID, prompt))
     {
         // At the global in-flight cap. Back off briefly rather than dropping this
         // bot's turn entirely, and never queue behind a slow endpoint.
@@ -508,6 +631,21 @@ void PlayerbotLongTermAI::CheckDirectiveCompletion()
 
 void PlayerbotLongTermAI::RetireDirective(std::string const& outcome)
 {
+    // Death or another interruption can retire a vendor directive while its
+    // second-agent request is in flight. Release the state machine immediately,
+    // but leave an in-flight request drainable so its journal row is not lost.
+    if (_vendorHandoff)
+    {
+        _vendorHandoff = false;
+        _vendorPlanReady = false;
+        _vendorPlan = LlmVendorPlan();
+        if (!_vendorPending)
+        {
+            _vendorPrompt.clear();
+            _vendorItems.clear();
+        }
+    }
+
     std::string const full = outcome + "; " + SummariseDirectiveOutcome();
     LlmJournal::SetLastOutcome(bot->GetGUID(), full);
     _directive.completed = true;

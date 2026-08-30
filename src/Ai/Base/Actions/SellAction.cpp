@@ -10,6 +10,7 @@
 #include "ItemUsageValue.h"
 #include "ItemVisitors.h"
 #include "Playerbots.h"
+#include "PlayerbotLongTermAI.h"
 
 class SellItemsVisitor : public IterateItemsVisitor
 {
@@ -122,7 +123,7 @@ void SellAction::Sell(Item* item)
         nicePacket.Read();
         bot->GetSession()->HandleSellItemOpcode(nicePacket);
 
-        if (botAI->HasCheat(BotCheatMask::gold))
+        if (botAI->HasCheat(BotCheatMask::gold) && !PlayerbotLongTermAI::IsHonestBot(bot))
         {
             bot->SetMoney(botMoney);
         }

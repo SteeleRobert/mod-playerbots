@@ -7,6 +7,7 @@
 #include "NewRpgAction.h"
 #include "AreaDefines.h"
 #include "BroadcastHelper.h"
+#include "BuyAction.h"
 #include "ChatHelper.h"
 #include "GossipDef.h"
 #include "IVMapMgr.h"
@@ -20,10 +21,16 @@
 #include "PathGenerator.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
+#include "PlayerbotLongTermAI.h"
+#include "PlayerbotMgr.h"
 #include "PlayerbotTextMgr.h"
+#include "Playerbots.h"
+#include "PossibleRpgTargetsValue.h"
 #include "QuestDef.h"
 #include "Random.h"
 #include "SharedDefines.h"
+#include "SellAction.h"
+#include "RepairAllAction.h"
 #include "Timer.h"
 #include "TravelMgr.h"
 #include "G3D/Vector2.h"
@@ -258,6 +265,22 @@ bool NewRpgStatusUpdateAction::Execute(Event /*event*/)
             // GO_CAMP -> WANDER_NPC
             if (bot->GetExactDist(originalPos) < 10.0f)
             {
+                if (PlayerbotLongTermAI* longTermAI =
+                        PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot))
+                {
+                    if (longTermAI->GetDirective().IsActive() &&
+                        longTermAI->GetDirective().action == LlmDirectiveAction::VENDOR)
+                    {
+                        // The global LLM cap may be full. Stay arrived at camp and
+                        // retry the handoff next tick instead of wandering away.
+                        if (longTermAI->BeginVendorHandoff())
+                        {
+                            info.ChangeToVendor();
+                            return true;
+                        }
+                        return false;
+                    }
+                }
                 info.ChangeToWanderNpc();
                 return true;
             }
@@ -322,10 +345,111 @@ bool NewRpgStatusUpdateAction::Execute(Event /*event*/)
             }
             break;
         }
+        case RPG_VENDOR:
+        {
+            if (info.HasStatusPersisted(2 * MINUTE * IN_MILLISECONDS))
+            {
+                if (PlayerbotLongTermAI* longTermAI =
+                        PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot))
+                    longTermAI->CompleteVendorHandoff("timed out finding or using a vendor");
+                info.ChangeToIdle();
+                return true;
+            }
+            break;
+        }
         default:
             break;
     }
     return false;
+}
+
+bool NewRpgVendorAction::Execute(Event /*event*/)
+{
+    PlayerbotLongTermAI* longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot);
+    auto* data = std::get_if<NewRpgInfo::Vendor>(&botAI->rpgInfo.data);
+    if (!longTermAI || !longTermAI->IsVendorHandoffActive() || !data)
+    {
+        botAI->rpgInfo.ChangeToIdle();
+        return false;
+    }
+
+    Creature* vendor = data->vendor ? ObjectAccessor::GetCreature(*bot, data->vendor) : nullptr;
+    if (!vendor || !vendor->IsInWorld() || vendor->IsDuringRemoveFromWorld() || !vendor->IsAlive() ||
+        !vendor->HasNpcFlag(UNIT_NPC_FLAG_VENDOR))
+    {
+        data->vendor.Clear();
+        GuidVector const targets = AI_VALUE(GuidVector, "possible new rpg targets");
+        for (ObjectGuid const guid : targets)
+        {
+            Creature* candidate = ObjectAccessor::GetCreature(*bot, guid);
+            if (!candidate || !candidate->IsAlive() || !candidate->HasNpcFlag(UNIT_NPC_FLAG_VENDOR))
+                continue;
+            data->vendor = guid; // PossibleNewRpgTargetsValue is nearest-first.
+            vendor = candidate;
+            break;
+        }
+    }
+
+    if (!vendor)
+        return ForceToWait(1000);
+
+    if (!bot->GetNPCIfCanInteractWith(vendor->GetGUID(), UNIT_NPC_FLAG_VENDOR))
+        return MoveWorldObjectTo(vendor->GetGUID(), INTERACTION_DISTANCE);
+
+    LlmVendorPlan plan;
+    if (!longTermAI->GetVendorPlan(plan))
+        return ForceToWait(1000);
+
+    uint32 const moneyBefore = bot->GetMoney();
+    uint32 const slotsBefore = bot->GetFreeInventorySpace();
+    uint32 sold = 0;
+
+    SellAction sell(botAI);
+    for (ObjectGuid const itemGuid : plan.sell)
+    {
+        Item* item = bot->GetItemByGuid(itemGuid);
+        if (!item)
+            continue;
+
+        // The bag may have changed while the model was answering. Reclassify on
+        // the world thread and apply the same hard allow-list immediately before
+        // sending the real CMSG_SELL_ITEM packet.
+        ItemUsage const usage = botAI->GetAiObjectContext()
+                                    ->GetValue<ItemUsage>("item usage", item->GetEntry())->Get();
+        if (!LlmVendor::IsSellAllowed(usage))
+            continue;
+        sell.Sell(item);
+        ++sold;
+    }
+
+    bool repaired = false;
+    if (plan.repair && vendor->HasNpcFlag(UNIT_NPC_FLAG_REPAIR))
+    {
+        uint32 const repairCost = AI_VALUE(uint32, "repair cost");
+        if (repairCost && repairCost <= bot->GetMoney())
+        {
+            RepairAllAction repair(botAI);
+            repaired = repair.Execute(Event());
+        }
+    }
+
+    bool restocked = false;
+    if (plan.restock)
+    {
+        BuyAction buy(botAI);
+        restocked = buy.Execute(Event("rpg action", "vendor"));
+    }
+
+    uint32 const moneyAfter = bot->GetMoney();
+    uint32 const slotsAfter = bot->GetFreeInventorySpace();
+    std::ostringstream outcome;
+    outcome << "sold " << sold << " stacks, repaired=" << (repaired ? "yes" : "no")
+            << ", restocked=" << (restocked ? "yes" : "no")
+            << ", money " << moneyBefore << "->" << moneyAfter
+            << ", free slots " << slotsBefore << "->" << slotsAfter;
+    longTermAI->CompleteVendorHandoff(outcome.str());
+    botAI->rpgInfo.ChangeToIdle();
+    return true;
 }
 
 bool NewRpgGoGrindAction::Execute(Event /*event*/)

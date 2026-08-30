@@ -289,7 +289,7 @@ namespace LlmClient
 {
     uint32 InFlight() { return g_inFlight.load(); }
 
-    bool Dispatch(ObjectGuid guid, std::string const& prompt)
+    bool Dispatch(ObjectGuid guid, std::string const& agentId, std::string const& prompt)
     {
         uint32 const cap = sPlayerbotAIConfig.llmDirectiveMaxConcurrent;
         if (cap && g_inFlight.load() >= cap)
@@ -298,12 +298,14 @@ namespace LlmClient
         ++g_inFlight;
 
         std::string promptCopy = prompt;
-        std::thread([guid, promptCopy]()
+        std::string agentIdCopy = agentId;
+        std::thread([guid, agentIdCopy, promptCopy]()
         {
             auto const started = std::chrono::steady_clock::now();
 
             LlmReply reply;
             reply.guid = guid;
+            reply.agentId = agentIdCopy;
             reply.prompt = promptCopy;
             reply.raw = PerformRequest(promptCopy, reply.error);
             reply.latencyMs = static_cast<uint32>(
@@ -320,12 +322,12 @@ namespace LlmClient
         return true;
     }
 
-    bool TakeReply(ObjectGuid guid, LlmReply& out)
+    bool TakeReply(ObjectGuid guid, std::string const& agentId, LlmReply& out)
     {
         std::lock_guard<std::mutex> lock(g_replyMutex);
         for (size_t i = 0; i < g_replies.size(); ++i)
         {
-            if (g_replies[i].guid != guid)
+            if (g_replies[i].guid != guid || g_replies[i].agentId != agentId)
                 continue;
             out = std::move(g_replies[i]);
             g_replies.erase(g_replies.begin() + i);
