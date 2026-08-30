@@ -1508,18 +1508,34 @@ AiPlayerbot.LlmDirective.DisableThinking = 1
 # Default: 1 (enabled)
 AiPlayerbot.LlmDirective.PreemptCurrentStatus = 1
 
-# Mirror each decision, and notable events (died / quest_done / leveled_up),
-# into the two tables the bot dashboard reads:
+# Mirror each decision, notable event (died / quest_done / leveled_up), and
+# frequent position sample into the tables the bot dashboard reads:
 #   mod_ollama_bot_buddy_journal   one row per decision + the prompt, which the
 #                                  dashboard also mines for live bot positions
-#   mod_ollama_chat_bot_events     positions, deaths, counters, journey replay
+#   mod_ollama_chat_bot_events     notable events, counters, journey markers
+#   playerbots_llm_bot_track       dense journey positions; never biography input
 # This exists so the dashboard can be fed WITHOUT enabling mod-ollama-bot-buddy,
 # which clears the non-combat engine every tick for the bots it drives - i.e. the
-# exact engine this layer steers. Tables are never created here; they belong to
-# those modules, and if absent these writes are skipped silently.
+# exact engine this layer steers. There is no runtime DDL; schema updates ship in
+# data/sql/characters/updates, and absent tables are skipped silently.
 # Only ever runs for bots already opted in to the LLM layer.
 # Default: 1 (enabled)
 AiPlayerbot.LlmDirective.DashboardTelemetry = 1
+
+# Record opted-in bots' positions in playerbots_llm_bot_track for smooth journey
+# replay. Samples are batched into multi-row writes on the asynchronous character
+# database queue. 0 disables position sampling without disabling decision/event
+# telemetry. At the default, ten continuously online bots create 120 rows/minute
+# (172,800/day).
+# Default: 5 seconds
+AiPlayerbot.LlmDirective.PositionSampleSeconds = 5
+
+# Delete position samples older than this many days. Cleanup runs asynchronously
+# in bounded chunks, once per minute. The minimum is 1 day. With ten continuously
+# online bots and the default five-second interval, seven days retains about
+# 1.21 million rows. Notable events use their own table and are not pruned here.
+# Default: 7 days
+AiPlayerbot.LlmDirective.PositionRetentionDays = 7
 
 # Strip the liveness cheats the classical random-bot machinery relies on, for
 # opted-in bots only:
