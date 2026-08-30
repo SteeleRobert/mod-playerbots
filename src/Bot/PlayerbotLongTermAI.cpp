@@ -56,6 +56,8 @@ PlayerbotLongTermAI::~PlayerbotLongTermAI()
 {
     if (bot)
     {
+        if (_optIn == 1)
+            LlmTelemetry::FlushPositionSamples(getMSTime(), true);
         // A worker may still be blocked on the endpoint for this bot; make sure its
         // reply is never handed to a stale object.
         LlmClient::DropPending(bot->GetGUID());
@@ -183,6 +185,16 @@ void PlayerbotLongTermAI::UpdateAI(uint32 /*elapsed*/, bool /*minimal*/)
     if (!IsDirectiveLayerActive())
         return;
 
+    uint32 const now = getMSTime();
+    uint32 const sampleSeconds = sPlayerbotAIConfig.llmDirectivePositionSampleSeconds;
+    if (sPlayerbotAIConfig.llmDirectiveDashboardTelemetry && sampleSeconds &&
+        (!_lastPositionSampleMs || getMSTimeDiff(_lastPositionSampleMs, now) >= sampleSeconds * 1000))
+    {
+        LlmTelemetry::SamplePosition(bot, now);
+        _lastPositionSampleMs = now;
+    }
+    LlmTelemetry::FlushPositionSamples(now);
+
     // Deaths are a signal the model should see; sample the transition rather than
     // the state so a five-minute corpse run counts once.
     bool const dead = !bot->IsAlive();
@@ -228,8 +240,6 @@ void PlayerbotLongTermAI::UpdateAI(uint32 /*elapsed*/, bool /*minimal*/)
             _telemetryQuestRewarded = rewarded;
         }
     }
-
-    uint32 const now = getMSTime();
 
     // A reply that came back since the last tick is applied here, on the world
     // thread, where touching bot state is legal.

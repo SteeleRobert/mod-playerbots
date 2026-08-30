@@ -10,12 +10,37 @@
 #include "Log.h"
 #include "Player.h"
 #include "PlayerbotAIConfig.h"
+#include "Timer.h"
 
 #include <mutex>
+#include <vector>
 
 namespace
 {
     constexpr size_t FIELD_CAP = 60000;
+    constexpr size_t POSITION_BATCH_SIZE = 50;
+    constexpr uint32 POSITION_BATCH_DELAY_MS = 1000;
+    constexpr uint32 POSITION_CLEANUP_INTERVAL_MS = 60 * 1000;
+    constexpr uint32 POSITION_CLEANUP_LIMIT = 10000;
+
+    struct PositionSample
+    {
+        uint64 botGuid;
+        uint32 map;
+        uint32 zone;
+        uint32 area;
+        float x;
+        float y;
+        float z;
+        uint32 level;
+    };
+
+    // LlmTelemetry is called from the world thread. Keeping the small buffer here
+    // avoids retaining Player pointers and turns N per-bot writes into one queued
+    // multi-row statement.
+    std::vector<PositionSample> pendingPositions;
+    uint32 pendingPositionsSinceMs = 0;
+    uint32 lastPositionCleanupMs = 0;
 
     std::string Escaped(std::string value)
     {
@@ -25,9 +50,9 @@ namespace
         return value;
     }
 
-    // These tables belong to the sibling Ollama modules. On a server built without
-    // them the tables simply are not there, and that is not an error worth a log
-    // line per decision - probe once, then stay quiet.
+    // Some telemetry tables belong to sibling modules and the track table arrives
+    // through this module's character-DB update. A missing optional table is not
+    // worth a log line per sample: probe once, then stay quiet.
     bool TableUsable(char const* table)
     {
         static std::mutex mutex;
@@ -93,5 +118,64 @@ namespace LlmTelemetry
             std::to_string(uint32(bot->GetLevel())) + ",1," + detail + ")";
 
         CharacterDatabase.Execute(sql.c_str());
+    }
+
+    void SamplePosition(Player* bot, uint32 nowMs)
+    {
+        if (!bot || !sPlayerbotAIConfig.llmDirectiveDashboardTelemetry ||
+            !sPlayerbotAIConfig.llmDirectivePositionSampleSeconds)
+            return;
+        if (!TableUsable("playerbots_llm_bot_track"))
+            return;
+
+        if (pendingPositions.empty())
+            pendingPositionsSinceMs = nowMs;
+
+        pendingPositions.push_back({bot->GetGUID().GetRawValue(), bot->GetMapId(), bot->GetZoneId(),
+                                    bot->GetAreaId(), bot->GetPositionX(), bot->GetPositionY(),
+                                    bot->GetPositionZ(), uint32(bot->GetLevel())});
+
+        if (pendingPositions.size() >= POSITION_BATCH_SIZE)
+            FlushPositionSamples(nowMs, true);
+    }
+
+    void FlushPositionSamples(uint32 nowMs, bool force)
+    {
+        if (pendingPositions.empty())
+            return;
+        if (!force && pendingPositions.size() < POSITION_BATCH_SIZE &&
+            getMSTimeDiff(pendingPositionsSinceMs, nowMs) < POSITION_BATCH_DELAY_MS)
+            return;
+
+        std::string sql =
+            "INSERT INTO playerbots_llm_bot_track "
+            "(bot_guid, map, zone, area, x, y, z, bot_level) VALUES ";
+        sql.reserve(sql.size() + pendingPositions.size() * 100);
+
+        bool first = true;
+        for (PositionSample const& sample : pendingPositions)
+        {
+            if (!first)
+                sql += ',';
+            first = false;
+            sql += '(' + std::to_string(sample.botGuid) + ',' + std::to_string(sample.map) + ',' +
+                   std::to_string(sample.zone) + ',' + std::to_string(sample.area) + ',' +
+                   std::to_string(sample.x) + ',' + std::to_string(sample.y) + ',' +
+                   std::to_string(sample.z) + ',' + std::to_string(sample.level) + ')';
+        }
+
+        CharacterDatabase.Execute(sql);
+        pendingPositions.clear();
+        pendingPositionsSinceMs = 0;
+
+        if (!lastPositionCleanupMs ||
+            getMSTimeDiff(lastPositionCleanupMs, nowMs) >= POSITION_CLEANUP_INTERVAL_MS)
+        {
+            CharacterDatabase.Execute(
+                "DELETE FROM playerbots_llm_bot_track WHERE sampled_at < "
+                "CURRENT_TIMESTAMP(3) - INTERVAL {} DAY LIMIT {}",
+                sPlayerbotAIConfig.llmDirectivePositionRetentionDays, POSITION_CLEANUP_LIMIT);
+            lastPositionCleanupMs = nowMs;
+        }
     }
 }
