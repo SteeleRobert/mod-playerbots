@@ -7,6 +7,9 @@
 #include "QuestAnchor.h"
 
 #include "Log.h"
+#include "DatabaseEnv.h"
+#include "Field.h"
+#include "QueryResult.h"
 #include "ObjectMgr.h"
 #include "QuestDef.h"
 
@@ -24,6 +27,24 @@ void QuestAnchor::EnsureBuilt()
     for (auto const& [spawnId, data] : sObjectMgr->GetAllCreatureData())
         _creatureSpawns[data.id].push_back({data.mapid, data.posX, data.posY, data.posZ});
 
+    for (auto const& [spawnId, data] : sObjectMgr->GetAllGOData())
+        _gameObjectSpawns[data.id].push_back({data.mapid, data.posX, data.posY, data.posZ});
+
+    // Exploration quests name nothing that has a spawn, but their completion
+    // areatrigger carries an exact x/y/z. ObjectMgr only maps trigger -> quest,
+    // so read the relation straight from the world DB and invert it.
+    if (QueryResult result = WorldDatabase.Query(
+            "SELECT r.quest, a.map, a.x, a.y, a.z FROM areatrigger_involvedrelation r "
+            "JOIN areatrigger a ON a.entry = r.id"))
+    {
+        do
+        {
+            Field* f = result->Fetch();
+            _questAreaTriggers[f[0].Get<uint32>()] =
+                {f[1].Get<uint32>(), f[2].Get<float>(), f[3].Get<float>(), f[4].Get<float>()};
+        } while (result->NextRow());
+    }
+
     // ObjectMgr only exposes creature -> quest; invert it so a quest can find who
     // takes it back.
     if (QuestRelations* involved = sObjectMgr->GetCreatureQuestInvolvedRelationMap())
@@ -31,8 +52,10 @@ void QuestAnchor::EnsureBuilt()
             _questEnders[questId].push_back(creatureEntry);
 
     LOG_INFO("playerbots",
-             "[QuestAnchor] indexed {} creature entries, {} quest enders",
-             _creatureSpawns.size(), _questEnders.size());
+             "[QuestAnchor] indexed {} creature entries, {} gameobject entries, "
+             "{} quest enders, {} exploration triggers",
+             _creatureSpawns.size(), _gameObjectSpawns.size(), _questEnders.size(),
+             _questAreaTriggers.size());
 }
 
 bool QuestAnchor::Nearest(std::vector<Anchor> const& candidates, uint32 mapId, float x, float y,
@@ -83,15 +106,10 @@ bool QuestAnchor::FindObjectiveAnchor(Quest const* quest, uint32 mapId, float po
         if (!entry)
             continue;
 
-        // A negative entry means a gameobject. ObjectMgr does not expose the
-        // gameobject spawn table, so those objectives keep the old behaviour for
-        // now - they are rarer than creature kills and worth a follow-up rather
-        // than a worse guess here.
-        if (entry < 0)
-            continue;
-
-        auto const itr = _creatureSpawns.find(static_cast<uint32>(entry));
-        if (itr == _creatureSpawns.end())
+        // A positive entry is a creature, a negative one a gameobject.
+        auto const& table = entry > 0 ? _creatureSpawns : _gameObjectSpawns;
+        auto const itr = table.find(static_cast<uint32>(std::abs(entry)));
+        if (itr == table.end())
             continue;
 
         Anchor candidate;
@@ -109,9 +127,25 @@ bool QuestAnchor::FindObjectiveAnchor(Quest const* quest, uint32 mapId, float po
         }
     }
 
-    if (found)
-        out = best;
-    return found;
+    // Nothing to kill or click: if this is an exploration quest, its areatrigger
+    // is the objective, and it is exact.
+    if (!found)
+        return FindExplorationAnchor(quest->GetQuestId(), mapId, out);
+
+    out = best;
+    return true;
+}
+
+bool QuestAnchor::FindExplorationAnchor(uint32 questId, uint32 mapId, Anchor& out)
+{
+    EnsureBuilt();
+
+    auto const itr = _questAreaTriggers.find(questId);
+    if (itr == _questAreaTriggers.end() || itr->second.mapId != mapId)
+        return false;
+
+    out = itr->second;
+    return true;
 }
 
 bool QuestAnchor::FindTurnInAnchor(uint32 questId, uint32 mapId, float poiX, float poiY, Anchor& out)

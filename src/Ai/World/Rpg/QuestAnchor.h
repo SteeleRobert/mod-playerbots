@@ -70,11 +70,20 @@ public:
     // The spawn of whoever this quest is handed in to, nearest to the POI point.
     bool FindTurnInAnchor(uint32 questId, uint32 mapId, float poiX, float poiY, Anchor& out);
 
+    // The areatrigger that completes an exploration quest. Exact, and the only
+    // anchor those quests have - they name no creature and carry no item.
+    bool FindExplorationAnchor(uint32 questId, uint32 mapId, Anchor& out);
+
 private:
     QuestAnchor() = default;
 
     bool _built{false};
     std::unordered_map<uint32, std::vector<Anchor>> _creatureSpawns;   // entry -> spawns
+    std::unordered_map<uint32, std::vector<Anchor>> _gameObjectSpawns; // entry -> spawns
+    // Exploration objectives: the quest's areatrigger, which carries a real
+    // x/y/z and a radius. Loaded from the world DB - ObjectMgr exposes only
+    // trigger -> quest, and the reverse is what is needed here.
+    std::unordered_map<uint32, Anchor> _questAreaTriggers;
     std::unordered_map<uint32, std::vector<uint32>> _questEnders;      // quest -> creature entries
 
     bool Nearest(std::vector<Anchor> const& candidates, uint32 mapId, float x, float y, Anchor& out) const;
