@@ -145,6 +145,7 @@ private:
     uint32 _telemetryLevel{0};
     uint32 _telemetryQuestRewarded{0};
     bool _telemetryPrimed{false};
+    uint32 _lastPositionSampleMs{0};
 };
 
 #endif

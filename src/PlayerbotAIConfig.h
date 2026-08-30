@@ -409,6 +409,8 @@ public:
     bool llmDirectiveDisableThinking;
     bool llmDirectivePreempt;
     bool llmDirectiveDashboardTelemetry;
+    uint32 llmDirectivePositionSampleSeconds;
+    uint32 llmDirectivePositionRetentionDays;
     bool llmDirectiveNoCheating;
     bool llmDirectiveReactToCompletion;
     bool llmDirectiveReactToInterrupts;
