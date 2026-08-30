@@ -86,6 +86,8 @@ private:
     void RequestDecision(uint32 now);
     void ConsumeReply(LlmReply const& reply);
     void CheckDirectiveCompletion();
+    void BringDecisionForward();
+    bool BotHoldsIncompleteQuest(uint32 questId) const;
     std::string SummariseDirectiveOutcome() const;
     void RetireDirective(std::string const& outcome);
 
@@ -96,6 +98,9 @@ private:
     int8 _optIn{-1};
 
     uint32 _nextDecisionMs{0};
+    // When the last decision was dispatched, so the minimum-interval floor
+    // applies to completion-triggered decisions too, not just scheduled ones.
+    uint32 _lastDecisionMs{0};
     bool _pending{false};
     std::string _pendingPrompt;
     std::vector<LlmZoneChoice> _pendingZones;

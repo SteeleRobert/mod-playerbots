@@ -190,6 +190,14 @@ void PlayerbotLongTermAI::UpdateAI(uint32 /*elapsed*/, bool /*minimal*/)
     {
         ++_deathsSinceLastDecision;
         LlmTelemetry::RecordEvent(bot, LlmTelemetry::EVENT_DIED);
+
+        // Whatever it was doing is moot now. Mark the decision due; the dead-bot
+        // guard below still holds it back until the bot is on its feet again, so
+        // this asks "you just died, now what" rather than prompting a corpse.
+        if (sPlayerbotAIConfig.llmDirectiveReactToInterrupts && _directive.IsActive())
+            RetireDirective("you died");
+        else if (sPlayerbotAIConfig.llmDirectiveReactToInterrupts)
+            BringDecisionForward();
     }
     _wasDead = dead;
 
@@ -291,6 +299,7 @@ void PlayerbotLongTermAI::RequestDecision(uint32 now)
     }
 
     _pending = true;
+    _lastDecisionMs = now;
     _pendingPrompt = std::move(prompt);
     _pendingZones = std::move(zones);
     _pendingQuests = std::move(quests);
@@ -318,11 +327,20 @@ void PlayerbotLongTermAI::ConsumeReply(LlmReply const& reply)
     record.replyChars = static_cast<uint32>(reply.raw.size());
     record.latencyMs = reply.latencyMs;
     record.prevDirective = _directive.action != LlmDirectiveAction::NONE ? _directive.Describe() : "";
-    record.prevOutcome = _directive.action != LlmDirectiveAction::NONE ? SummariseDirectiveOutcome() : "";
+    // A retired directive already carries the reason it ended ("finished quest 3904",
+    // "arrived in Westfall", "you died") plus its own summary. Prefer that: it is
+    // what actually triggered this decision, and overwriting it with the bare
+    // summary hides whether the bot finished or merely timed out.
+    if (_directive.action == LlmDirectiveAction::NONE)
+        record.prevOutcome = "";
+    else if (!_directive.outcome.empty())
+        record.prevOutcome = _directive.outcome;
+    else
+        record.prevOutcome = SummariseDirectiveOutcome();
 
     // Close the book on the previous directive before the new one replaces it, so
     // the history the model sees always has an outcome attached.
-    if (_directive.action != LlmDirectiveAction::NONE)
+    if (_directive.action != LlmDirectiveAction::NONE && _directive.outcome.empty())
         LlmJournal::SetLastOutcome(bot->GetGUID(), record.prevOutcome);
 
     LlmDirective parsed;
@@ -425,6 +443,16 @@ void PlayerbotLongTermAI::ConsumeReply(LlmReply const& reply)
                                 record.latencyMs, record.prompt, record.reply);
 }
 
+// True while the bot still holds this quest with work left on it.
+bool PlayerbotLongTermAI::BotHoldsIncompleteQuest(uint32 questId) const
+{
+    for (uint8 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
+        if (bot->GetQuestSlotQuestId(slot) == questId)
+            return bot->GetQuestStatus(questId) == QUEST_STATUS_INCOMPLETE;
+
+    return false;   // no longer in the log at all
+}
+
 void PlayerbotLongTermAI::CheckDirectiveCompletion()
 {
     if (!_directive.IsActive())
@@ -436,8 +464,24 @@ void PlayerbotLongTermAI::CheckDirectiveCompletion()
             if (_directive.zoneId && bot->GetZoneId() == _directive.zoneId)
                 RetireDirective("arrived in " + _directive.zoneName);
             break;
+        case LlmDirectiveAction::QUEST:
+            // A named quest whose objectives are done is finished as far as this
+            // directive goes - what to do next (hand it in, start another, move on)
+            // is exactly the decision worth asking for now rather than in four
+            // minutes' time.
+            if (_directive.questId && !BotHoldsIncompleteQuest(_directive.questId))
+                RetireDirective("finished quest " + std::to_string(_directive.questId));
+            break;
         case LlmDirectiveAction::TURNIN:
         {
+            // A named quest is done the moment it leaves the log (rewarded).
+            if (_directive.questId)
+            {
+                if (bot->GetQuestStatus(_directive.questId) != QUEST_STATUS_COMPLETE)
+                    RetireDirective("handed in quest " + std::to_string(_directive.questId));
+                break;
+            }
+
             bool anyComplete = false;
             for (uint8 slot = 0; slot < MAX_QUEST_LOG_SIZE && !anyComplete; ++slot)
             {
@@ -468,6 +512,32 @@ void PlayerbotLongTermAI::RetireDirective(std::string const& outcome)
     LlmJournal::SetLastOutcome(bot->GetGUID(), full);
     _directive.completed = true;
     _directive.outcome = full;
+
+    if (!sPlayerbotAIConfig.llmDirectiveReactToCompletion)
+        return;
+
+    // Bring the next decision forward, but never closer to the last one than the
+    // configured floor. An "expired" directive is deliberately excluded: that is a
+    // timeout, not an achievement, and reacting to it would turn a dead endpoint
+    // into a retry storm.
+    if (outcome.rfind("expired", 0) == 0)
+        return;
+
+    BringDecisionForward();
+}
+
+// Schedule the next decision as soon as the rate floor allows. The floor is
+// measured from the last decision actually dispatched, so a burst of completions
+// or deaths cannot outrun it.
+void PlayerbotLongTermAI::BringDecisionForward()
+{
+    uint32 const now = getMSTime();
+    uint32 const earliest = _lastDecisionMs + sPlayerbotAIConfig.llmDirectiveMinIntervalSeconds * 1000;
+    uint32 const due = (now > earliest) ? now : earliest;
+
+    // Only ever pull the decision earlier, never push it later.
+    if (_nextDecisionMs == 0 || due < _nextDecisionMs)
+        _nextDecisionMs = due;
 }
 
 std::string PlayerbotLongTermAI::SummariseDirectiveOutcome() const

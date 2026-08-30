@@ -1451,7 +1451,11 @@ AiPlayerbot.LlmDirective.BotNames = ""
 # Default: 0
 AiPlayerbot.LlmDirective.RandomBotPercent = 0
 
-# Seconds between decisions for one bot. Each bot's first decision is spread
+# Maximum seconds between decisions for one bot. With ReactToCompletion and
+# ReactToInterrupts on (the defaults) this is a CEILING rather than a cadence:
+# most decisions are triggered by a directive finishing or by an interrupt, and
+# this is the backstop for directives that have no natural completion (grind,
+# vendor) or that quietly stall. Each bot's first decision is spread
 # randomly across one full interval, and every subsequent one adds JitterSeconds of
 # random spread, so fifty bots do not all fire in the same tick. Minimum 30.
 # Default: 300 (five minutes)
@@ -1531,6 +1535,33 @@ AiPlayerbot.LlmDirective.DashboardTelemetry = 1
 # destination makes the strategic layer that chose it look better than it is.
 # Default: 1 (enabled)
 AiPlayerbot.LlmDirective.NoCheating = 1
+
+# Ask the model again as soon as a directive is actually FINISHED, instead of
+# waiting out IntervalSeconds. Completion is the most informative moment to
+# re-decide - the bot has just turned a quest in, or arrived somewhere - and the
+# model gets to react while the outcome still matters.
+# Recognised completions: a named quest whose objectives are done ("quest"), a
+# named quest that has left the log ("turnin"), no complete quests remaining
+# ("turnin" with no quest named), arrival in the target zone ("travel").
+# A directive that merely EXPIRED does not count - that is a timeout, not an
+# achievement, and reacting to it would turn a dead endpoint into a retry storm.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.ReactToCompletion = 1
+
+# Also re-decide when something INVALIDATES the current plan rather than
+# completing it. Currently that means dying: whatever the bot was told to do, it
+# is now a corpse, and resuming the old plan is rarely the right answer. The
+# decision is held until the bot is back on its feet - a corpse is not asked what
+# it wants to do next.
+# Default: 1 (enabled)
+AiPlayerbot.LlmDirective.ReactToInterrupts = 1
+
+# Hard floor in seconds between two decisions for the same bot, whatever triggers
+# them. This is the safety rail on ReactToCompletion: a directive that completes
+# the instant it is issued must not be able to turn one bot into a request loop.
+# Minimum 5.
+# Default: 30
+AiPlayerbot.LlmDirective.MinIntervalSeconds = 30
 
 # Sampling temperature. This is a classification task; keep it low.
 # Default: 0.2

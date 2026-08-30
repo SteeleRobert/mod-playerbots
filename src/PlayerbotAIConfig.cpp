@@ -765,6 +765,21 @@ bool PlayerbotAIConfig::Initialize()
     // teleporting instead of walking, free repair/heal/money/restock. An LLM bot
     // that teleports out of a bad decision is not demonstrating anything.
     llmDirectiveNoCheating = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.NoCheating", true);
+    // Ask again as soon as a directive is actually finished, rather than sitting
+    // idle until the interval expires. Finishing is the most informative moment
+    // to re-decide, and the model gets to see the outcome while it still matters.
+    llmDirectiveReactToCompletion =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.ReactToCompletion", true);
+    // Events that invalidate the current plan rather than complete it. Dying is
+    // the clear one: whatever the bot was told to do, it is now a corpse and the
+    // plan deserves revisiting rather than resuming.
+    llmDirectiveReactToInterrupts =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.ReactToInterrupts", true);
+    // Hard floor between two decisions for one bot, whatever triggers them. This
+    // is the safety rail on the above: a directive that completes the instant it
+    // is issued must not be able to turn one bot into a request loop.
+    llmDirectiveMinIntervalSeconds =
+        std::max<uint32>(5, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.MinIntervalSeconds", 30));
     // "ollama" (default) or "openai". vLLM serves the OpenAI-compatible API, so
     // that is what a vLLM deployment wants; the Url must then point at
     // /v1/chat/completions rather than /api/generate.
