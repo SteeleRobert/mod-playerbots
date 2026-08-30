@@ -49,6 +49,7 @@ namespace
             case RPG_DO_QUEST:      return "working a quest";
             case RPG_TRAVEL_FLIGHT: return "taking a flight";
             case RPG_REST:          return "resting";
+            case RPG_VENDOR:        return "using a vendor";
             default:                return "unknown";
         }
     }

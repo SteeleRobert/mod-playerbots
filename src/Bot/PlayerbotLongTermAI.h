@@ -5,6 +5,7 @@
 #include "FunctionTool.h"
 #include "LongTerm/LlmClient.h"
 #include "LongTerm/LlmDirective.h"
+#include "LongTerm/LlmVendor.h"
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
@@ -77,6 +78,13 @@ public:
     // whether the intent ever actually reached the world.
     void NoteDirectiveApplied(NewRpgStatus status);
 
+    // GO_CAMP hands an arrived vendor directive to this separately prompted
+    // agent. The New RPG vendor action owns movement and trade execution.
+    bool BeginVendorHandoff();
+    bool IsVendorHandoffActive() const;
+    bool GetVendorPlan(LlmVendorPlan& out) const;
+    void CompleteVendorHandoff(std::string const& outcome);
+
 protected:
     Player* bot;
     FunctionToolRegistry functionToolRegistry;
@@ -85,6 +93,7 @@ private:
     bool ComputeOptIn() const;
     void RequestDecision(uint32 now);
     void ConsumeReply(LlmReply const& reply);
+    void ConsumeVendorReply(LlmReply const& reply);
     void CheckDirectiveCompletion();
     void BringDecisionForward();
     bool BotHoldsIncompleteQuest(uint32 questId) const;
@@ -105,6 +114,14 @@ private:
     std::string _pendingPrompt;
     std::vector<LlmZoneChoice> _pendingZones;
     std::vector<uint32> _pendingQuests;
+
+    bool _vendorHandoff{false};
+    bool _vendorPending{false};
+    bool _vendorPlanReady{false};
+    bool _vendorRepairOffered{false};
+    std::string _vendorPrompt;
+    std::vector<LlmVendorItem> _vendorItems;
+    LlmVendorPlan _vendorPlan;
 
     LlmDirective _directive;
     uint32 _directiveApplyCount{0};

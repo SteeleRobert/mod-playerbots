@@ -11,6 +11,7 @@
 #include "ItemUsageValue.h"
 #include "ItemVisitors.h"
 #include "Playerbots.h"
+#include "PlayerbotLongTermAI.h"
 #include "StatsWeightCalculator.h"
 
 bool BuyAction::Execute(Event event)
@@ -230,12 +231,14 @@ bool BuyAction::BuyItem(VendorItemData const* tItems, ObjectGuid vendorguid, Ite
             continue;
 
         uint32 botMoney = bot->GetMoney();
-        if (botAI->HasCheat(BotCheatMask::gold))
+        bool const goldCheat = botAI->HasCheat(BotCheatMask::gold) &&
+                               !PlayerbotLongTermAI::IsHonestBot(bot);
+        if (goldCheat)
             bot->SetMoney(10000000);
 
         bot->BuyItemFromVendorSlot(vendorguid, slot, itemId, 1, NULL_BAG, NULL_SLOT);
 
-        if (botAI->HasCheat(BotCheatMask::gold))
+        if (goldCheat)
             bot->SetMoney(botMoney);
 
         uint32 newCount = bot->GetItemCount(itemId, false);
