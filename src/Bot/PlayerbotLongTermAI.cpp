@@ -1,4 +1,5 @@
 #include "PlayerbotLongTermAI.h"
+#include "QuestAnchor.h"
 #include "LongTerm/LlmJournal.h"
 #include "LongTerm/LlmPrompt.h"
 #include "LongTerm/LlmTelemetry.h"
@@ -113,7 +114,72 @@ bool PlayerbotLongTermAI::IsHonestBot(Player* bot)
 
 uint32 PlayerbotLongTermAI::GetDirectiveZoneId() const
 {
-    return _directive.IsActive() ? _directive.zoneId : 0;
+    if (!_directive.IsActive())
+        return 0;
+
+    if (_directive.zoneId)
+        return _directive.zoneId;
+
+    // A bare "turnin" names no zone, but the quest ender still stands somewhere
+    // definite. When that is too far to walk, the taxi network needs a target.
+    uint32 turnInZone = 0;
+    float turnInDist = 0.f;
+    if (GetTurnInDestination(turnInZone, turnInDist) && turnInDist > MAX_TURNIN_WALK_DIST)
+        return turnInZone;
+
+    return 0;
+}
+
+bool PlayerbotLongTermAI::GetTurnInDestination(uint32& zoneId, float& distance) const
+{
+    zoneId = 0;
+    distance = 0.f;
+
+    if (!_directive.IsActive() || _directive.action != LlmDirectiveAction::TURNIN)
+        return false;
+
+    Map* map = bot->GetMap();
+    if (!map)
+        return false;
+
+    bool found = false;
+    for (uint8 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
+    {
+        uint32 const questId = bot->GetQuestSlotQuestId(slot);
+        if (!questId || bot->GetQuestStatus(questId) != QUEST_STATUS_COMPLETE)
+            continue;
+
+        // A named quest is the whole answer; the rest of the log is not consulted.
+        if (_directive.questId && questId != _directive.questId)
+            continue;
+
+        QuestAnchor::Anchor anchor;
+        if (!sQuestAnchor.FindTurnInAnchor(questId, bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(),
+                                           anchor))
+        {
+            continue;
+        }
+
+        uint32 const anchorZone = map->GetZoneId(bot->GetPhaseMask(), anchor.x, anchor.y, anchor.z);
+        if (!anchorZone || anchorZone == bot->GetZoneId())
+        {
+            // Something can be handed in right here. Doing that beats setting off
+            // across the map for a different quest, so report no journey at all.
+            zoneId = 0;
+            distance = 0.f;
+            return false;
+        }
+
+        float const dist = bot->GetDistance2d(anchor.x, anchor.y);
+        if (!found || dist < distance)
+        {
+            zoneId = anchorZone;
+            distance = dist;
+            found = true;
+        }
+    }
+
+    return found;
 }
 
 uint32 PlayerbotLongTermAI::GetDirectiveQuestId() const
@@ -207,6 +273,19 @@ std::vector<NewRpgStatus> PlayerbotLongTermAI::GetPreferredRpgStatuses()
     {
         case LlmDirectiveAction::QUEST:
         case LlmDirectiveAction::TURNIN:
+        {
+            // Quests are very often handed in outside the zone they were finished
+            // in - in Elwynn the common ones end in Stormwind City or Westfall.
+            // Anything inside the walking cap the bot covers on foot under
+            // DO_QUEST below; past that the taxi network is the honest way there.
+            uint32 turnInZone = 0;
+            float turnInDist = 0.f;
+            if (!_directive.zoneId && _directive.action == LlmDirectiveAction::TURNIN &&
+                GetTurnInDestination(turnInZone, turnInDist) && turnInDist > MAX_TURNIN_WALK_DIST)
+            {
+                preferred.push_back(RPG_TRAVEL_FLIGHT);
+            }
+
             preferred.push_back(RPG_DO_QUEST);
             // DO_QUEST needs a quest in the log with usable POI data. A bot with an
             // empty log cannot satisfy "quest" that way, and the model says so itself
@@ -215,6 +294,7 @@ std::vector<NewRpgStatus> PlayerbotLongTermAI::GetPreferredRpgStatuses()
             // second choice rather than dropping to an unrelated random roll.
             preferred.push_back(RPG_WANDER_NPC);
             break;
+        }
         case LlmDirectiveAction::GRIND:
             preferred.push_back(RPG_GO_GRIND);
             preferred.push_back(RPG_WANDER_RANDOM);
@@ -527,8 +607,22 @@ void PlayerbotLongTermAI::ConsumeReply(LlmReply const& reply)
             {
                 NewRpgStatus const current = botAI->rpgInfo.GetStatus();
                 std::vector<NewRpgStatus> const preferred = GetPreferredRpgStatuses();
-                bool const alreadyDoingIt =
+                bool alreadyDoingIt =
                     std::find(preferred.begin(), preferred.end(), current) != preferred.end();
+
+                NewRpgInfo::DoQuest const* doQuest =
+                    current == RPG_DO_QUEST ? std::get_if<NewRpgInfo::DoQuest>(&botAI->rpgInfo.data) : nullptr;
+
+                // "Already doing it" has to mean the right quest, not merely the
+                // right status. A bot walking to an incomplete quest's objectives is
+                // in RPG_DO_QUEST, which matched a turn-in directive and left it
+                // there untouched: 671 of 1093 turn-in directives came back "you
+                // were already doing this" while the completed quest sat in the log.
+                if (alreadyDoingIt && doQuest && _directive.action == LlmDirectiveAction::TURNIN &&
+                    doQuest->questId && bot->GetQuestStatus(doQuest->questId) != QUEST_STATUS_COMPLETE)
+                {
+                    alreadyDoingIt = false;
+                }
 
                 // Never interrupt a taxi hop (the bot is mid-air and the flight is the
                 // only cross-zone transport there is), and never yank it out of combat.
@@ -549,11 +643,7 @@ void PlayerbotLongTermAI::ConsumeReply(LlmReply const& reply)
                 //
                 // So leave a parked bot alone. The directive still lands - at the
                 // next roll, which is exactly what the stall timer triggers.
-                bool parkedAtQuestPoi = false;
-                if (current == RPG_DO_QUEST)
-                    if (NewRpgInfo::DoQuest const* dq =
-                            std::get_if<NewRpgInfo::DoQuest>(&botAI->rpgInfo.data))
-                        parkedAtQuestPoi = dq->lastReachPOI != 0;
+                bool const parkedAtQuestPoi = doQuest && doQuest->lastReachPOI != 0;
 
                 if (!alreadyDoingIt && !busyUninterruptible && !parkedAtQuestPoi)
                     botAI->rpgInfo.ChangeToIdle();

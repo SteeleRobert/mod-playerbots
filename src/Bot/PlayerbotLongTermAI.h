@@ -74,6 +74,17 @@ public:
     // Quest the current directive named, or 0 to let the engine pick.
     uint32 GetDirectiveQuestId() const;
 
+    // How far a bot will walk to hand a quest in outside its own zone before the
+    // taxi network becomes the better answer. At run speed 3000 yards is roughly
+    // seven minutes on foot, which is about as long as a walk stays believable.
+    static constexpr float MAX_TURNIN_WALK_DIST = 3000.0f;
+
+    // Where a completed quest actually has to be handed in, when that is outside
+    // the bot's current zone. False when nothing is waiting, when the turn-in is
+    // already in this zone (the classical in-zone path handles that), or when the
+    // directive is not a turn-in. `distance` is the 2-D distance to the ender.
+    bool GetTurnInDestination(uint32& zoneId, float& distance) const;
+
     // The engine took the directive up; recorded so the next prompt can say
     // whether the intent ever actually reached the world.
     void NoteDirectiveApplied(NewRpgStatus status);
