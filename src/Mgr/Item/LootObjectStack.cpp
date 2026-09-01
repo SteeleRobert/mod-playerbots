@@ -277,6 +277,36 @@ LootObject::LootObject(LootObject const& other)
     reqItem = other.reqItem;
 }
 
+namespace
+{
+    // Only general-purpose containers count: a quiver or a soul bag has free slots
+    // that a herb or an ore can never go into. Matches what BagSpaceValue counts,
+    // so the number the strategic layer is shown and the one the loot code acts on
+    // cannot disagree.
+    bool HasFreeBagSlot(Player* bot)
+    {
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+            if (!bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                return true;
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        {
+            Bag const* bag = reinterpret_cast<Bag*>(bot->GetItemByPos(INVENTORY_SLOT_BAG_0, bagSlot));
+            if (!bag)
+                continue;
+
+            ItemTemplate const* proto = bag->GetTemplate();
+            if (proto && proto->Class == ITEM_CLASS_CONTAINER && proto->SubClass == ITEM_SUBCLASS_CONTAINER &&
+                bag->GetFreeSlots())
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
 bool LootObject::IsLootPossible(Player* bot)
 {
     if (IsEmpty() || !bot)
@@ -319,6 +349,15 @@ bool LootObject::IsLootPossible(Player* bot)
         return true;
 
     if (skillId == SKILL_FISHING)
+        return false;
+
+    // Gathering with no room to put the result is the whole bug. The server refuses
+    // the item, the node stays exactly where it was, and OpenLootAction reports OK
+    // regardless - so the bot re-targets the same node on the very next tick and
+    // never moves again. Measured on a live server: ten bots at zero free slots,
+    // sixteen of twenty-seven parked on a node for twelve hours. Corpses are left
+    // alone here: their loot can be money, which needs no slot at all.
+    if (!HasFreeBagSlot(bot))
         return false;
 
     if (!botAI->HasSkill((SkillType)skillId))
@@ -367,19 +406,16 @@ bool LootObjectStack::IsSetAside(ObjectGuid guid)
     if (itr == lootFailures.end())
         return false;
 
-    // One window covers both jobs: it expires the set-aside AND bounds what
-    // "consecutive" means. Five failures spread over a week are not a pattern,
-    // and treating them as one is how a node gets condemned by ancient history.
     if (itr->second.expiresAt <= time(nullptr))
     {
         lootFailures.erase(itr);
         return false;
     }
 
-    return itr->second.attempts >= MAX_LOOT_ATTEMPTS;
+    return itr->second.setAside;
 }
 
-void LootObjectStack::NoteFailure(ObjectGuid guid)
+void LootObjectStack::NoteAttempt(ObjectGuid guid)
 {
     time_t const now = time(nullptr);
 
@@ -394,21 +430,27 @@ void LootObjectStack::NoteFailure(ObjectGuid guid)
     {
         if (lootFailures.size() >= MAX_TRACKED_FAILURES)
             PruneFailures(now);
-        itr = lootFailures.emplace(guid.GetRawValue(), LootFailure{}).first;
+        itr = lootFailures.emplace(guid.GetRawValue(), LootFailure{now, now, 0, false}).first;
     }
 
-    ++itr->second.attempts;
-    itr->second.expiresAt = now + LOOT_BLACKLIST_SECONDS;
+    LootFailure& record = itr->second;
 
-    // Measured on a live server: 16 of 27 bots stood within five yards of a herb
-    // or ore node for twelve hours without moving. OpenLootAction only clears the
-    // loot target when the loot succeeds, so a node that cannot be taken - a full
-    // bag, a cast that never lands - stays nearest and is re-picked every tick.
-    if (itr->second.attempts >= MAX_LOOT_ATTEMPTS)
+    // A long silence means the bot went off and came back, which is a fresh visit
+    // rather than a continuation of the last one.
+    if (now - record.lastAttempt > static_cast<time_t>(ATTEMPT_GAP_SECONDS))
+        record.firstAttempt = now;
+
+    record.lastAttempt = now;
+    record.expiresAt = now + LOOT_BLACKLIST_SECONDS;
+
+    // Still on the same object half a minute later. Whatever the action keeps
+    // reporting, this object is not being taken - put it aside so the bot moves on.
+    if (!record.setAside && now - record.firstAttempt >= static_cast<time_t>(STUCK_ON_OBJECT_SECONDS))
+    {
+        record.setAside = true;
         Remove(guid);
+    }
 }
-
-void LootObjectStack::NoteSuccess(ObjectGuid guid) { lootFailures.erase(guid.GetRawValue()); }
 
 bool LootObjectStack::Add(ObjectGuid guid)
 {

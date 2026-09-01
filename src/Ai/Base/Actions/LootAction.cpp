@@ -73,19 +73,20 @@ bool OpenLootAction::Execute(Event /*event*/)
     LootObject lootObject = AI_VALUE(LootObject, "loot target");
     bool result = DoLoot(lootObject);
     LootObjectStack* stack = AI_VALUE(LootObjectStack*, "available loot");
+
+    // Recorded whatever the result was. A live trace of a wedged bot reads
+    // "A:open loot - OK" on every tick while the node it is standing on never
+    // disappears: DoLoot returns true as soon as a cast is STARTED, so success
+    // here says nothing about whether anything was actually picked up.
+    stack->NoteAttempt(lootObject.guid);
+
     if (result)
     {
-        stack->NoteSuccess(lootObject.guid);
         stack->Remove(lootObject.guid);
         context->GetValue<LootObject>("loot target")->Set(LootObject());
         return true;
     }
 
-    // A failed attempt used to leave the target exactly where it was, so the same
-    // object was tried again on the next tick and every tick after that. The bot
-    // never moved again. Count the failures, and once the object has had its five
-    // chances drop it as the target so something else can be chosen.
-    stack->NoteFailure(lootObject.guid);
     if (!stack->CanLoot(sPlayerbotAIConfig.lootDistance))
         context->GetValue<LootObject>("loot target")->Set(LootObject());
 
@@ -413,28 +414,18 @@ bool StoreLootAction::Execute(Event event)
         if (!proto)
             continue;
 
-        if (!IsRealPlayer(botAI->GetMaster()) && AI_VALUE(uint8, "bag space") > 80)
-        {
-            uint32 maxStack = proto->GetMaxStackSize();
-            if (maxStack == 1)
-                continue;
-
-            std::vector<Item*> found = parseItems(chat->FormatItem(proto));
-
-            bool hasFreeStack = false;
-
-            for (auto stack : found)
-            {
-                if (stack->GetCount() + itemcount < maxStack)
-                {
-                    hasFreeStack = true;
-                    break;
-                }
-            }
-
-            if (!hasFreeStack)
-                continue;
-        }
+        // A bot above 80% bag space used to decline anything it could not merge into
+        // a stack it already held. The intent was to stop it hoarding junk, but the
+        // item is declined AFTER the loot window is already open, so the object keeps
+        // its loot, stays lootable, and is picked again on the very next tick.
+        //
+        // Measured on a live server: every one of 27 bots was above 80%, so none of
+        // them could take a new item type at all. Sixteen stood on a gathering node
+        // for twelve hours; Posco ran 66 loot cycles and finished with no ore. The
+        // action reported OK every time, so nothing anywhere noticed.
+        //
+        // A full bag is a reason to go and sell, not a reason to stand on a node
+        // forever pretending to mine it.
 
         Player* master = botAI->GetMaster();
         if (sRandomPlayerbotMgr.IsRandomBot(bot) && master)

@@ -85,8 +85,11 @@ public:
     // object is put aside for LOOT_BLACKLIST_SECONDS and Add() refuses it, which
     // is the only thing that breaks the loop: the scanner re-adds any node still
     // in range, so removing it alone lasts exactly one tick.
-    void NoteFailure(ObjectGuid guid);
-    void NoteSuccess(ObjectGuid guid);
+    // Called on every attempt, whatever the action reported. OpenLootAction returns
+    // OK the moment a cast is started, so "did it succeed" carries no information:
+    // a bot with a full bag casts, is refused by the server, and is told OK. What
+    // does carry information is that the same object is still being attempted.
+    void NoteAttempt(ObjectGuid guid);
 
 private:
     LootObject GetNearest(float maxDistance = 0);
@@ -96,7 +99,18 @@ private:
     // clipped by movement) without leaving the bot pinned to a node it can
     // never take. The wait is short because the usual cause - a full bag - is
     // itself temporary, and a bot that has since sold should try again.
-    static constexpr uint8 MAX_LOOT_ATTEMPTS = 5;
+    // Time, not tries: a gather cast runs several seconds and a fixed count of
+    // attempts would be burned through before it ever had a chance to land.
+    //
+    // A minute. This is a backstop, not the fix - the real cause was StoreLootAction
+    // declining items above 80% bag space - so it is set well clear of anything
+    // legitimate rather than tuned tight. A node that is actually taken despawns, so
+    // a working interaction is never seen twice; only one that refuses to die can
+    // reach sixty seconds, and by then the bot has plainly been standing there.
+    static constexpr uint32 STUCK_ON_OBJECT_SECONDS = 60;
+    // A gap this long means the bot left and came back, so the clock restarts
+    // rather than holding it responsible for an older visit.
+    static constexpr uint32 ATTEMPT_GAP_SECONDS = 10;
     static constexpr uint32 LOOT_BLACKLIST_SECONDS = 15 * 60;
     // Hard ceiling on the failure table. A first failure is common - a clipped
     // cast, a global cooldown - so without a cap this grows an entry for nearly
@@ -106,8 +120,10 @@ private:
 
     struct LootFailure
     {
-        uint8 attempts{0};
+        time_t firstAttempt{0};
+        time_t lastAttempt{0};
         time_t expiresAt{0};
+        bool setAside{false};
     };
 
     void PruneFailures(time_t now);
