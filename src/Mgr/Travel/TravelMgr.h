@@ -886,6 +886,12 @@ public:
     // strategic layer to enumerate the only zone names a directive may name.
     std::vector<uint32> GetLevelAppropriateZones(Player* bot) const;
 
+    // The faction's capitals plus the neutral hubs, restricted to the ones a taxi
+    // can actually reach. Capitals are deliberately absent from zone2LevelBracket
+    // - they are not levelling zones - so GetLevelAppropriateZones can never name
+    // one, which leaves the strategic layer unable to express "go back to town".
+    std::vector<uint32> GetCapitalZones(TeamId team) const;
+
     // Taxi path from the bot's nearest flight master into `zoneId`, or empty when
     // there is no usable route. The zone-targeted counterpart of
     // GetOptimalFlightDestinations, which picks a destination at random.

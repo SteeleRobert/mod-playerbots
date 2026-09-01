@@ -665,6 +665,29 @@ void PlayerbotLongTermAI::ConsumeReply(LlmReply const& reply)
         _directiveApplyCount = 0;
         _directiveAligned = false;
 
+        // A refused answer used to leave no trace in the history ring - PushHistory
+        // was only ever called on the accepted path - so the next prompt came out
+        // byte-identical to the one that had just been refused, and a model handed
+        // the same prompt returns the same answer. That is a permanent wedge, not a
+        // retry: Garrester on olab1 reissued "travel to Stormwind City" eight times
+        // running, and 337 rejections across 11 bots in six hours never once told
+        // the model that anything had been refused. Write the refusal down so the
+        // prompt actually changes on the next pass.
+        //
+        // Only for answers the parser refused. A transport error is our endpoint
+        // failing, not the model's answer being wrong, and blaming the model for it
+        // would put a lie in its history.
+        if (reply.error.empty())
+        {
+            LlmHistoryEntry entry;
+            entry.directive = parsed.action != LlmDirectiveAction::NONE
+                                  ? "REJECTED " + std::string(LlmDirectiveActionToString(parsed.action))
+                                  : "REJECTED";
+            entry.reason = parsed.reason;
+            entry.outcome = error + " - that answer was refused; do not repeat it";
+            LlmJournal::PushHistory(bot->GetGUID(), std::move(entry));
+        }
+
         LOG_WARN("playerbots", "[LlmDirective] {} rejected reply ({} chars, {}ms): {}", bot->GetName(),
                  record.replyChars, reply.latencyMs, LogSafe(error));
     }

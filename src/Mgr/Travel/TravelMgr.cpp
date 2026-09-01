@@ -4419,6 +4419,26 @@ std::vector<uint32> TravelMgr::GetLevelAppropriateZones(Player* bot) const
     return zones;
 }
 
+std::vector<uint32> TravelMgr::GetCapitalZones(TeamId team) const
+{
+    std::vector<uint32> zones;
+    for (Capital const& capital : capitals)
+    {
+        if (capital.team != team && capital.team != TEAM_NEUTRAL)
+            continue;
+
+        // Same taxi-node test GetLevelAppropriateZones applies, for the same
+        // reason: a travel order into a zone with no flight master this faction
+        // can use cannot be flown, and the caller would silently get a random
+        // destination instead of the one it asked for.
+        if (GetFlightNodesInZone(capital.zoneId, team).empty())
+            continue;
+
+        zones.push_back(capital.zoneId);
+    }
+    return zones;
+}
+
 std::vector<uint32> TravelMgr::GetFlightPathToZone(Player* bot, uint32 zoneId) const
 {
     std::vector<uint32> path;
