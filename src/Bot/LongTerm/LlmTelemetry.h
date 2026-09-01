@@ -10,10 +10,10 @@
 /*
  * Feeds the bot dashboard from this module.
  *
- * The dashboard (~/bot-dashboard) reads two tables owned by the sibling Ollama
- * modules. Rather than switch those modules on - mod-ollama-bot-buddy clears the
- * non-combat engine every tick, which would delete the very machinery this layer
- * steers - we write the same telemetry ourselves:
+ * The dashboard (~/bot-dashboard) reads telemetry tables in the character DB.
+ * Rather than switch the sibling Ollama modules on - mod-ollama-bot-buddy clears
+ * the non-combat engine every tick, which would delete the very machinery this
+ * layer steers - we write compatible telemetry ourselves:
  *
  *   mod_ollama_bot_buddy_journal  one row per decision. The dashboard also mines
  *                                 the `prompt` column for live positions, by
@@ -23,9 +23,13 @@
  *   mod_ollama_chat_bot_events    died / quest_done / leveled_up, with position,
  *                                 driving the deaths list, map markers, journey
  *                                 replay and the per-bot counters.
+ *   playerbots_llm_bot_track      frequent position-only samples. This table is
+ *                                 ours, is TTL-pruned, and must not feed the chat
+ *                                 module's biography summarizer.
  *
- * We never CREATE these tables: they belong to the other modules. If a table is
- * absent, its writes are skipped silently and everything else carries on.
+ * We never CREATE the sibling-module tables at runtime. The track table ships as
+ * a module character-DB update. If any table is absent, its writes are skipped
+ * silently and everything else carries on.
  */
 
 #include "Define.h"
@@ -52,6 +56,14 @@ namespace LlmTelemetry
 
     // A notable thing that happened, stamped with where the bot was when it did.
     void RecordEvent(Player* bot, char const* eventType, std::string const& detailJson = "");
+
+    // Queue a cheap position snapshot and periodically hand a multi-row insert to
+    // the character DB worker. `nowMs` is the world-thread monotonic clock.
+    void SamplePosition(Player* bot, uint32 nowMs);
+
+    // Called from opted-in bots' ordinary ticks so a partial batch does not wait
+    // for the next sample window before being submitted.
+    void FlushPositionSamples(uint32 nowMs, bool force = false);
 }
 
 #endif

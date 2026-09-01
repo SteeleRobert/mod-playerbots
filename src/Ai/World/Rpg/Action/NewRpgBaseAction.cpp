@@ -6,6 +6,8 @@
 
 #include "NewRpgBaseAction.h"
 
+#include "QuestAnchor.h"
+
 #include <algorithm>
 #include "BroadcastHelper.h"
 #include "ChatHelper.h"
@@ -863,6 +865,24 @@ bool NewRpgBaseAction::GetQuestPOIPosAndObjectiveIdx(uint32 questId, std::vector
 
     if (toComplete && q_status.Status == QUEST_STATUS_COMPLETE)
     {
+        // A "turnin" directive deliberately sends the bot out of the zone it
+        // finished the quest in. Measured on the live server: 47 of the 76 quests
+        // sitting complete in bot logs were handed in somewhere else - Report to
+        // Gryan Stoutmantle in Westfall, Shipment to Stormwind in Stormwind City -
+        // and the in-zone test below discarded every one of them. The strategic
+        // layer asked for "turnin" 1093 times in four hours and handed in about 20
+        // quests, because the engine could never find a POI it was allowed to use.
+        //
+        // Classical bots keep the in-zone rule: staying local is the behaviour the
+        // New RPG machine was built around, and nothing there asks to leave.
+        bool crossZone = false;
+        if (sPlayerbotAIConfig.llmDirectiveEnabled)
+        {
+            PlayerbotLongTermAI* longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot);
+            crossZone = longTermAI && longTermAI->PrefersCompletedQuests();
+        }
+        float const maxPoiDist = crossZone ? PlayerbotLongTermAI::MAX_TURNIN_WALK_DIST : 1500.0f;
+
         for (const QuestPOI& qPoi : *poiVector)
         {
             if (qPoi.MapId != bot->GetMapId())
@@ -884,18 +904,32 @@ bool NewRpgBaseAction::GetQuestPOIPosAndObjectiveIdx(uint32 questId, std::vector
                 dy += point.y * weights[i];
             }
 
-            if (bot->GetDistance2d(dx, dy) >= 1500.0f)
+            if (bot->GetDistance2d(dx, dy) >= maxPoiDist)
                 continue;
 
-            float dz = std::max(bot->GetMap()->GetHeight(dx, dy, MAX_HEIGHT), bot->GetMap()->GetWaterLevel(dx, dy));
+            // Prefer the real height of whoever takes this quest back. The POI is
+            // 2-D; guessing from terrain puts indoor turn-ins on the roof.
+            QuestAnchor::Anchor anchor;
+            bool anchored = sQuestAnchor.FindTurnInAnchor(questId, bot->GetMapId(), dx, dy, anchor);
 
-            if (dz == INVALID_HEIGHT || dz == VMAP_INVALID_HEIGHT_VALUE)
+            float dz = anchored
+                           ? anchor.z
+                           : std::max(bot->GetMap()->GetHeight(dx, dy, MAX_HEIGHT),
+                                      bot->GetMap()->GetWaterLevel(dx, dy));
+
+            if (!anchored && (dz == INVALID_HEIGHT || dz == VMAP_INVALID_HEIGHT_VALUE))
                 continue;
 
-            if (bot->GetZoneId() != bot->GetMap()->GetZoneId(bot->GetPhaseMask(), dx, dy, dz))
+            if (anchored)
+            {
+                dx = anchor.x;
+                dy = anchor.y;
+            }
+
+            if (!crossZone && bot->GetZoneId() != bot->GetMap()->GetZoneId(bot->GetPhaseMask(), dx, dy, dz))
                 continue;
 
-            poiInfo.push_back({{dx, dy}, qPoi.ObjectiveIndex});
+            poiInfo.push_back({{dx, dy}, qPoi.ObjectiveIndex, dz, anchored});
         }
 
         if (poiInfo.empty())
@@ -959,15 +993,28 @@ bool NewRpgBaseAction::GetQuestPOIPosAndObjectiveIdx(uint32 questId, std::vector
         if (bot->GetDistance2d(dx, dy) >= 1500.0f)
             continue;
 
-        float dz = std::max(bot->GetMap()->GetHeight(dx, dy, MAX_HEIGHT), bot->GetMap()->GetWaterLevel(dx, dy));
+        // Same for objectives: anchor on a spawn of the creature the quest wants
+        // killed, so a mine objective targets the mine floor, not the hill on top.
+        QuestAnchor::Anchor anchor;
+        bool anchored = sQuestAnchor.FindObjectiveAnchor(quest, bot->GetMapId(), dx, dy, anchor);
 
-        if (dz == INVALID_HEIGHT || dz == VMAP_INVALID_HEIGHT_VALUE)
+        float dz = anchored ? anchor.z
+                            : std::max(bot->GetMap()->GetHeight(dx, dy, MAX_HEIGHT),
+                                       bot->GetMap()->GetWaterLevel(dx, dy));
+
+        if (!anchored && (dz == INVALID_HEIGHT || dz == VMAP_INVALID_HEIGHT_VALUE))
             continue;
+
+        if (anchored)
+        {
+            dx = anchor.x;
+            dy = anchor.y;
+        }
 
         if (bot->GetZoneId() != bot->GetMap()->GetZoneId(bot->GetPhaseMask(), dx, dy, dz))
             continue;
 
-        poiInfo.push_back({{dx, dy}, qPoi.ObjectiveIndex});
+        poiInfo.push_back({{dx, dy}, qPoi.ObjectiveIndex, dz, anchored});
     }
 
     if (poiInfo.size() == 0)
