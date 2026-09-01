@@ -1,5 +1,7 @@
 #include "PlayerbotLongTermAI.h"
 #include "QuestAnchor.h"
+#include "AiObjectContext.h"
+#include "LootObjectStack.h"
 #include "LongTerm/LlmJournal.h"
 #include "LongTerm/LlmPrompt.h"
 #include "LongTerm/LlmTelemetry.h"
@@ -258,6 +260,94 @@ void PlayerbotLongTermAI::CompleteVendorHandoff(std::string const& outcome)
     RetireDirective("vendor service complete: " + outcome);
 }
 
+void PlayerbotLongTermAI::MarkMoved(uint32 now)
+{
+    _stationarySinceMs = now;
+    _watchdogX = bot->GetPositionX();
+    _watchdogY = bot->GetPositionY();
+    _watchdogZ = bot->GetPositionZ();
+}
+
+// Break a bot out of anything that has stopped it moving.
+//
+// Measured on olab1: 16 of 27 bots stood within five yards of a herb or ore node
+// for twelve hours. OpenLootAction only cleared the loot target when the loot
+// succeeded, so a node the bot could not take stayed nearest and was re-picked
+// every tick, forever. That specific hole is fixed in LootObjectStack - but it
+// went unnoticed for a day while the hourly count of moving bots fell from 23 to
+// 1, and nothing reported a fault, because every bot was alive, ticking, and
+// still answering the model.
+//
+// So this deliberately does not care WHY a bot is stuck. It asks only whether it
+// has moved, and escalates: first drop whatever state might be pinning it, and if
+// half an hour later it is still on the same spot, the problem is the spot rather
+// than the state - hearthstone out, the way a player would.
+void PlayerbotLongTermAI::CheckMovementWatchdog(uint32 now)
+{
+    PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot);
+    if (!botAI)
+        return;
+
+    // Standing still on purpose is not being stuck. A corpse cannot walk, a bot in
+    // combat should not wander off, a taxi hop is movement the bot does not drive,
+    // and RPG_REST is a state the engine deliberately chose.
+    if (!bot->IsAlive() || bot->IsInCombat() || bot->IsInFlight() || bot->IsBeingTeleported() ||
+        botAI->rpgInfo.GetStatus() == RPG_REST)
+    {
+        MarkMoved(now);
+        return;
+    }
+
+    if (!_stationarySinceMs)
+    {
+        MarkMoved(now);
+        return;
+    }
+
+    if (bot->GetDistance(_watchdogX, _watchdogY, _watchdogZ) >= WATCHDOG_MIN_MOVE)
+    {
+        MarkMoved(now);
+        return;
+    }
+
+    uint32 const stationaryMs = getMSTimeDiff(_stationarySinceMs, now);
+    if (stationaryMs < WATCHDOG_RESET_SECONDS * 1000)
+        return;
+
+    // Half an hour rooted to one spot: the state teardown below has already been
+    // tried and did not help, so leave under the bot's own power. Deliberately an
+    // item and not a teleport - honest bots do not get a free ride out of a hole,
+    // and a bot with no hearthstone or one on cooldown simply keeps waiting.
+    if (stationaryMs >= WATCHDOG_HEARTH_SECONDS * 1000 && bot->HasItemCount(HEARTHSTONE_ITEM, 1, false) &&
+        !bot->HasSpellCooldown(HEARTHSTONE_SPELL))
+    {
+        bot->CastSpell(bot, HEARTHSTONE_SPELL, false);
+        LlmTelemetry::RecordEvent(bot, LlmTelemetry::EVENT_STUCK, "{\"watchdog_hearthstone\":true}");
+        LOG_WARN("playerbots", "[LlmDirective] {} rooted for {}s; hearthstoning to its inn", bot->GetName(),
+                 stationaryMs / 1000);
+        MarkMoved(now);
+        return;
+    }
+
+    // Rate-limit the teardown so it fires once per window rather than every tick
+    // for the whole half hour before the hearthstone becomes available.
+    if (_lastWatchdogResetMs && getMSTimeDiff(_lastWatchdogResetMs, now) < WATCHDOG_RESET_SECONDS * 1000)
+        return;
+
+    _lastWatchdogResetMs = now;
+
+    // Drop everything that could be pinning the bot: the object it may be retrying,
+    // the whole visible-loot set, and whatever RPG state it sat in.
+    if (LootObjectStack* stack = botAI->GetAiObjectContext()->GetValue<LootObjectStack*>("available loot")->Get())
+        stack->Clear();
+    botAI->GetAiObjectContext()->GetValue<LootObject>("loot target")->Set(LootObject());
+    botAI->rpgInfo.ChangeToIdle();
+
+    LlmTelemetry::RecordEvent(bot, LlmTelemetry::EVENT_STUCK, "{\"watchdog_reset\":true}");
+    LOG_WARN("playerbots", "[LlmDirective] {} had not moved in {}s; cleared loot target and RPG state",
+             bot->GetName(), stationaryMs / 1000);
+}
+
 std::vector<NewRpgStatus> PlayerbotLongTermAI::GetPreferredRpgStatuses()
 {
     std::vector<NewRpgStatus> preferred;
@@ -338,6 +428,8 @@ void PlayerbotLongTermAI::UpdateAI(uint32 /*elapsed*/, bool /*minimal*/)
         _lastPositionSampleMs = now;
     }
     LlmTelemetry::FlushPositionSamples(now);
+
+    CheckMovementWatchdog(now);
 
     // Deaths are a signal the model should see; sample the transition rather than
     // the state so a five-minute corpse run counts once.

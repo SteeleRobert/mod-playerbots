@@ -348,8 +348,73 @@ bool LootObject::IsLootPossible(Player* bot)
     return true;
 }
 
+// Drop every entry whose window has closed. Called only when the table is at its
+// ceiling, so the usual path pays nothing.
+void LootObjectStack::PruneFailures(time_t now)
+{
+    for (auto itr = lootFailures.begin(); itr != lootFailures.end();)
+        itr = (itr->second.expiresAt <= now) ? lootFailures.erase(itr) : ++itr;
+
+    // Everything still live and still over the cap: the bot is somewhere dense
+    // enough that keeping the oldest entries is worth less than staying bounded.
+    if (lootFailures.size() >= MAX_TRACKED_FAILURES)
+        lootFailures.clear();
+}
+
+bool LootObjectStack::IsSetAside(ObjectGuid guid)
+{
+    auto itr = lootFailures.find(guid.GetRawValue());
+    if (itr == lootFailures.end())
+        return false;
+
+    // One window covers both jobs: it expires the set-aside AND bounds what
+    // "consecutive" means. Five failures spread over a week are not a pattern,
+    // and treating them as one is how a node gets condemned by ancient history.
+    if (itr->second.expiresAt <= time(nullptr))
+    {
+        lootFailures.erase(itr);
+        return false;
+    }
+
+    return itr->second.attempts >= MAX_LOOT_ATTEMPTS;
+}
+
+void LootObjectStack::NoteFailure(ObjectGuid guid)
+{
+    time_t const now = time(nullptr);
+
+    auto itr = lootFailures.find(guid.GetRawValue());
+    if (itr != lootFailures.end() && itr->second.expiresAt <= now)
+    {
+        lootFailures.erase(itr);
+        itr = lootFailures.end();
+    }
+
+    if (itr == lootFailures.end())
+    {
+        if (lootFailures.size() >= MAX_TRACKED_FAILURES)
+            PruneFailures(now);
+        itr = lootFailures.emplace(guid.GetRawValue(), LootFailure{}).first;
+    }
+
+    ++itr->second.attempts;
+    itr->second.expiresAt = now + LOOT_BLACKLIST_SECONDS;
+
+    // Measured on a live server: 16 of 27 bots stood within five yards of a herb
+    // or ore node for twelve hours without moving. OpenLootAction only clears the
+    // loot target when the loot succeeds, so a node that cannot be taken - a full
+    // bag, a cast that never lands - stays nearest and is re-picked every tick.
+    if (itr->second.attempts >= MAX_LOOT_ATTEMPTS)
+        Remove(guid);
+}
+
+void LootObjectStack::NoteSuccess(ObjectGuid guid) { lootFailures.erase(guid.GetRawValue()); }
+
 bool LootObjectStack::Add(ObjectGuid guid)
 {
+    if (IsSetAside(guid))
+        return false;
+
     if (availableLoot.size() >= MAX_LOOT_OBJECT_COUNT)
     {
         availableLoot.shrink(time(nullptr) - 30);

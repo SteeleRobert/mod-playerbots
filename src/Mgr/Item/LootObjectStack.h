@@ -9,6 +9,9 @@
 
 #include "ObjectGuid.h"
 
+#include <ctime>
+#include <unordered_map>
+
 class AiObjectContext;
 class Player;
 class WorldObject;
@@ -78,11 +81,40 @@ public:
     bool CanLoot(float maxDistance);
     LootObject GetLoot(float maxDistance = 0);
 
+    // A loot attempt that did not succeed. After MAX_LOOT_ATTEMPTS of these the
+    // object is put aside for LOOT_BLACKLIST_SECONDS and Add() refuses it, which
+    // is the only thing that breaks the loop: the scanner re-adds any node still
+    // in range, so removing it alone lasts exactly one tick.
+    void NoteFailure(ObjectGuid guid);
+    void NoteSuccess(ObjectGuid guid);
+
 private:
     LootObject GetNearest(float maxDistance = 0);
+    bool IsSetAside(ObjectGuid guid);
+
+    // Five is enough to ride out a transient miss (global cooldown, a cast
+    // clipped by movement) without leaving the bot pinned to a node it can
+    // never take. The wait is short because the usual cause - a full bag - is
+    // itself temporary, and a bot that has since sold should try again.
+    static constexpr uint8 MAX_LOOT_ATTEMPTS = 5;
+    static constexpr uint32 LOOT_BLACKLIST_SECONDS = 15 * 60;
+    // Hard ceiling on the failure table. A first failure is common - a clipped
+    // cast, a global cooldown - so without a cap this grows an entry for nearly
+    // every corpse and node the bot ever touches and never gives one back. At
+    // 3000 bots that is measured in gigabytes; at this cap it is a few KB each.
+    static constexpr size_t MAX_TRACKED_FAILURES = 64;
+
+    struct LootFailure
+    {
+        uint8 attempts{0};
+        time_t expiresAt{0};
+    };
+
+    void PruneFailures(time_t now);
 
     Player* bot;
     LootTargetList availableLoot;
+    std::unordered_map<uint64, LootFailure> lootFailures;
 };
 
 #endif

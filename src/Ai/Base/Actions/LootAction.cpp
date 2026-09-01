@@ -72,12 +72,24 @@ bool OpenLootAction::Execute(Event /*event*/)
 {
     LootObject lootObject = AI_VALUE(LootObject, "loot target");
     bool result = DoLoot(lootObject);
+    LootObjectStack* stack = AI_VALUE(LootObjectStack*, "available loot");
     if (result)
     {
-        AI_VALUE(LootObjectStack*, "available loot")->Remove(lootObject.guid);
+        stack->NoteSuccess(lootObject.guid);
+        stack->Remove(lootObject.guid);
         context->GetValue<LootObject>("loot target")->Set(LootObject());
+        return true;
     }
-    return result;
+
+    // A failed attempt used to leave the target exactly where it was, so the same
+    // object was tried again on the next tick and every tick after that. The bot
+    // never moved again. Count the failures, and once the object has had its five
+    // chances drop it as the target so something else can be chosen.
+    stack->NoteFailure(lootObject.guid);
+    if (!stack->CanLoot(sPlayerbotAIConfig.lootDistance))
+        context->GetValue<LootObject>("loot target")->Set(LootObject());
+
+    return false;
 }
 
 bool OpenLootAction::DoLoot(LootObject& lootObject)

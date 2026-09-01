@@ -157,6 +157,27 @@ private:
     uint32 _telemetryQuestRewarded{0};
     bool _telemetryPrimed{false};
     uint32 _lastPositionSampleMs{0};
+
+    // Movement watchdog. A bot that has not moved for this long, while nothing
+    // legitimately holds it still, is wedged in something - and the specific
+    // wedge is never the interesting part, because there is always another one.
+    void CheckMovementWatchdog(uint32 now);
+    void MarkMoved(uint32 now);
+
+    // Anything under this in five minutes is not travel, it is jitter: the engine's
+    // idle wander is 8-10 yards and would clear it on its own.
+    static constexpr float WATCHDOG_MIN_MOVE = 12.0f;
+    // First response: tear down the state that might be pinning the bot.
+    static constexpr uint32 WATCHDOG_RESET_SECONDS = 300;
+    // Still rooted half an hour later, so the problem is where the bot IS, not what
+    // it is holding. Hearthstone out, which is what a player would do.
+    static constexpr uint32 WATCHDOG_HEARTH_SECONDS = 1800;
+    static constexpr uint32 HEARTHSTONE_ITEM = 6948;
+    static constexpr uint32 HEARTHSTONE_SPELL = 8690;
+
+    float _watchdogX{0.f}, _watchdogY{0.f}, _watchdogZ{0.f};
+    uint32 _stationarySinceMs{0};
+    uint32 _lastWatchdogResetMs{0};
 };
 
 #endif
