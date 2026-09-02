@@ -83,11 +83,11 @@ namespace LlmTelemetry
     {
         if (!bot || !sPlayerbotAIConfig.llmDirectiveDashboardTelemetry)
             return;
-        if (!TableUsable("mod_ollama_bot_buddy_journal"))
+        if (!TableUsable("playerbots_llm_journal"))
             return;
 
         std::string const sql =
-            "INSERT INTO mod_ollama_bot_buddy_journal "
+            "INSERT INTO playerbots_llm_journal "
             "(bot_guid, bot_name, command, params, reasoning, succeeded, outcome, latency_ms, prompt, reply) VALUES (" +
             std::to_string(bot->GetGUID().GetRawValue()) + ",'" + Escaped(bot->GetName()) + "','" +
             Escaped(command) + "','" + Escaped(params) + "','" + Escaped(reasoning) + "'," +
@@ -101,7 +101,7 @@ namespace LlmTelemetry
     {
         if (!bot || !eventType || !sPlayerbotAIConfig.llmDirectiveDashboardTelemetry)
             return;
-        if (!TableUsable("mod_ollama_chat_bot_events"))
+        if (!TableUsable("playerbots_llm_events"))
             return;
 
         // `detail` is a JSON column: it takes valid JSON or NULL, never a bare string.
@@ -109,7 +109,7 @@ namespace LlmTelemetry
                                                       : ("'" + Escaped(detailJson) + "'");
 
         std::string const sql =
-            "INSERT INTO mod_ollama_chat_bot_events "
+            "INSERT INTO playerbots_llm_events "
             "(bot_guid, event_type, map, zone, area, x, y, z, bot_level, count, detail) VALUES (" +
             std::to_string(bot->GetGUID().GetRawValue()) + ",'" + Escaped(eventType) + "'," +
             std::to_string(bot->GetMapId()) + "," + std::to_string(bot->GetZoneId()) + "," +
@@ -171,10 +171,11 @@ namespace LlmTelemetry
         if (!lastPositionCleanupMs ||
             getMSTimeDiff(lastPositionCleanupMs, nowMs) >= POSITION_CLEANUP_INTERVAL_MS)
         {
-            CharacterDatabase.Execute(
+            std::string const cleanupSql =
                 "DELETE FROM playerbots_llm_bot_track WHERE sampled_at < "
-                "CURRENT_TIMESTAMP(3) - INTERVAL {} DAY LIMIT {}",
-                sPlayerbotAIConfig.llmDirectivePositionRetentionDays, POSITION_CLEANUP_LIMIT);
+                "CURRENT_TIMESTAMP(3) - INTERVAL " + std::to_string(sPlayerbotAIConfig.llmDirectivePositionRetentionDays) +
+                " DAY LIMIT " + std::to_string(POSITION_CLEANUP_LIMIT);
+            CharacterDatabase.Execute(cleanupSql.c_str());
             lastPositionCleanupMs = nowMs;
         }
     }

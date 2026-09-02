@@ -756,9 +756,7 @@ bool PlayerbotAIConfig::Initialize()
     // decisions reported "the engine never took it up").
     llmDirectivePreempt = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.PreemptCurrentStatus", true);
     // Mirror decisions and notable events into the tables the bot dashboard
-    // reads, so it can be fed without enabling mod-ollama-bot-buddy (which
-    // would clear the non-combat engine this layer steers). Only ever runs for
-    // bots already opted in to the LLM layer.
+    // reads. Only ever runs for bots already opted in to the LLM layer.
     llmDirectiveDashboardTelemetry =
         sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.DashboardTelemetry", true);
     llmDirectivePositionSampleSeconds =
