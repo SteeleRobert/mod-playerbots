@@ -1,7 +1,7 @@
 -- #########################################################
 -- Playerbots - dense position samples for journey replay
 --
--- This is deliberately separate from mod_ollama_chat_bot_events:
+-- This is deliberately separate from playerbots_llm_events:
 -- position samples are high-volume telemetry, not biography events.
 -- Rows are pruned by LlmTelemetry according to
 -- AiPlayerbot.LlmDirective.PositionRetentionDays.
