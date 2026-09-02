@@ -171,10 +171,11 @@ namespace LlmTelemetry
         if (!lastPositionCleanupMs ||
             getMSTimeDiff(lastPositionCleanupMs, nowMs) >= POSITION_CLEANUP_INTERVAL_MS)
         {
-            CharacterDatabase.Execute(
+            std::string const cleanupSql =
                 "DELETE FROM playerbots_llm_bot_track WHERE sampled_at < "
-                "CURRENT_TIMESTAMP(3) - INTERVAL {} DAY LIMIT {}",
-                sPlayerbotAIConfig.llmDirectivePositionRetentionDays, POSITION_CLEANUP_LIMIT);
+                "CURRENT_TIMESTAMP(3) - INTERVAL " + std::to_string(sPlayerbotAIConfig.llmDirectivePositionRetentionDays) +
+                " DAY LIMIT " + std::to_string(POSITION_CLEANUP_LIMIT);
+            CharacterDatabase.Execute(cleanupSql.c_str());
             lastPositionCleanupMs = nowMs;
         }
     }
