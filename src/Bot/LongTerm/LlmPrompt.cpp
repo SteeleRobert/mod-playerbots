@@ -276,25 +276,51 @@ namespace LlmPrompt
         }
         out << "\n";
 
+        // The first entry is always the bot's own zone, so anything less than two
+        // means there is nowhere this bot may fly to. Offering "travel" then can
+        // only produce a refused reply, so the verb is withheld with the list.
+        // Measured on olab1: 99 prompts in three hours whose entire legal list was
+        // the bot's own zone, every one of them offering a travel it could not take.
+        bool const canTravel = legalZones.size() > 1;
+
         out << "LEGAL ACTIONS - pick exactly one:\n"
             << "  quest  - keep working the quest log where you are\n"
-            << "  grind  - farm mobs for experience instead of questing\n"
-            << "  travel - fly to a different zone (you MUST name a zone)\n"
-            << "  turnin - go hand in the quests that are already complete\n"
+            << "  grind  - farm mobs for experience instead of questing\n";
+        if (canTravel)
+            out << "  travel - fly to a different zone (you MUST name a zone)\n";
+        out << "  turnin - go hand in the quests that are already complete\n"
             << "  vendor - head to a town to repair, sell and restock\n\n";
 
-        out << "LEGAL ZONES - copy one of these names exactly, or use \"\" to stay put:\n";
-        for (size_t i = 0; i < legalZones.size(); ++i)
-            out << (i ? " | " : "  ") << legalZones[i].name;
-        out << "\n\n";
+        if (canTravel)
+        {
+            out << "LEGAL ZONES - copy one of these names exactly, or use \"\" to stay put:\n";
+            for (size_t i = 0; i < legalZones.size(); ++i)
+                out << (i ? " | " : "  ") << legalZones[i].name;
+            out << "\n";
+
+            // The quest log above prints the zone each quest belongs to, and most of
+            // those zones are not travel destinations - there is no flight route to
+            // them from here. Saying so is what stops the model reading a quest's zone
+            // as somewhere it may go: "Elmore's Task ... in Stormwind City" in the log
+            // produced travel orders to Stormwind City that were refused every time.
+            out << "The zones named in the quest log are NOT travel destinations unless they also\n"
+                   "appear in this list. A \"travel\" naming anything else is refused outright and the\n"
+                   "bot does nothing for the next few minutes - use \"turnin\", which routes itself to\n"
+                   "the right place, or pick a zone from the list.\n\n";
+        }
+        else
+        {
+            out << "There is nowhere you can fly to from here, so travel is not on the list above.\n"
+                   "Leave zone as \"\".\n\n";
+        }
 
         out << "For \"quest\" or \"turnin\" you MAY name one quest from the log above by its\n"
                "id, and the bot will work on that one. Leave quest_id as 0 to let the bot\n"
                "choose for itself.\n\n";
 
         out << "Answer with ONE JSON object and nothing else, in exactly this shape:\n"
-            << "{\"action\":\"quest|grind|travel|turnin|vendor\",\"zone\":\"\","
-               "\"quest_id\":0,\"reason\":\"under 20 words\"}\n";
+            << "{\"action\":\"quest|grind|" << (canTravel ? "travel|" : "") << "turnin|vendor\","
+               "\"zone\":\"\",\"quest_id\":0,\"reason\":\"under 20 words\"}\n";
 
         return out.str();
     }
