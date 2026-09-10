@@ -147,6 +147,9 @@ questGiverMap QuestGiversValue::Calculate()
 
                     if (quest && (level < quest->GetMinLevel() || (int)level > quest->GetQuestLevel() + 10))
                         continue;
+
+                    if (quest && quest->GetRequiredSkill() != 0)
+                        continue;
                 }
 
                 guidps[questId].push_back(guidp);
@@ -171,6 +174,9 @@ std::vector<GuidPosition> ActiveQuestGiversValue::Calculate()
         {
             continue;
         }
+
+        if (quest->GetRequiredSkill() != 0)
+            continue;
 
         if (!bot->CanTakeQuest(quest, false))
             continue;
