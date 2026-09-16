@@ -11,25 +11,22 @@
  * Feeds the bot dashboard from this module.
  *
  * The dashboard (~/bot-dashboard) reads telemetry tables in the character DB.
- * Rather than switch the sibling Ollama modules on - mod-ollama-bot-buddy clears
- * the non-combat engine every tick, which would delete the very machinery this
- * layer steers - we write compatible telemetry ourselves:
+ * We write telemetry that the dashboard is designed to consume:
  *
- *   mod_ollama_bot_buddy_journal  one row per decision. The dashboard also mines
+ *   playerbots_llm_journal        one row per decision. The dashboard also mines
  *                                 the `prompt` column for live positions, by
  *                                 locating the literal "Bot state summary:" and
  *                                 parsing the next ~600 bytes. LlmPrompt emits
  *                                 that header in exactly the expected format.
- *   mod_ollama_chat_bot_events    died / quest_done / leveled_up, with position,
+ *   playerbots_llm_events         died / quest_done / leveled_up, with position,
  *                                 driving the deaths list, map markers, journey
  *                                 replay and the per-bot counters.
  *   playerbots_llm_bot_track      frequent position-only samples. This table is
- *                                 ours, is TTL-pruned, and must not feed the chat
- *                                 module's biography summarizer.
+ *                                 TTL-pruned and provides high-frequency position
+ *                                 tracking for bots.
  *
- * We never CREATE the sibling-module tables at runtime. The track table ships as
- * a module character-DB update. If any table is absent, its writes are skipped
- * silently and everything else carries on.
+ * If any table is absent, its writes are skipped silently and everything else
+ * carries on.
  */
 
 #include "Define.h"
@@ -41,8 +38,8 @@ class Player;
 
 namespace LlmTelemetry
 {
-    // Canonical event names, matching mod-ollama-chat's MEMORY_EVENT_* constants.
-    // The dashboard queries 'died' and 'quest_done' by name and tallies the rest.
+    // Canonical event names. The dashboard queries 'died' and 'quest_done' by name
+    // and tallies the rest.
     constexpr char const* EVENT_DIED       = "died";
     constexpr char const* EVENT_QUEST_DONE = "quest_done";
     constexpr char const* EVENT_LEVELED_UP = "leveled_up";
