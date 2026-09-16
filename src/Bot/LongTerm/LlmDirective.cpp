@@ -252,6 +252,30 @@ namespace LlmZones
         // expressible, otherwise every reply is a relocation.
         push(bot->GetZoneId());
 
+        // Capitals next, and never level-gated. They are not levelling zones, so
+        // they are absent from zone2LevelBracket and GetLevelAppropriateZones can
+        // never name one - which meant no capital was EVER offered to any bot at
+        // any level. Meanwhile the quest log this same prompt prints names them
+        // ("Elmore's Task ... in Stormwind City"), so the model asked to travel
+        // there and every such reply was rejected: 125 rejections across 3 bots in
+        // six hours on olab1, plus 201 more for Elwynn Forest, whose bots were
+        // trying to reach the same turn-ins by naming the zone next door.
+        //
+        // Same map only. There is no taxi route between continents, and an
+        // unroutable travel order does not fail loudly - it degrades to a random
+        // flight (NewRpgBaseAction, RPG_TRAVEL_FLIGHT), which is worse than not
+        // offering the zone at all.
+        //
+        // They go before the level list so a wide bracket cannot crowd them out of
+        // MAX_ZONES.
+        uint32 const botMapId = bot->GetMapId();
+        for (uint32 zoneId : sTravelMgr.GetCapitalZones(bot->GetTeamId()))
+        {
+            AreaTableEntry const* area = sAreaTableStore.LookupEntry(zoneId);
+            if (area && area->mapid == botMapId)
+                push(zoneId);
+        }
+
         for (uint32 zoneId : sTravelMgr.GetLevelAppropriateZones(bot))
             push(zoneId);
 
