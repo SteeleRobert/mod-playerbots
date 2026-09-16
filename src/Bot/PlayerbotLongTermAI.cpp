@@ -1,15 +1,20 @@
 #include "PlayerbotLongTermAI.h"
 #include "QuestAnchor.h"
 #include "AiObjectContext.h"
+#include "GameGraveyard.h"
+#include "GridTerrainData.h"
 #include "LootObjectStack.h"
+#include "LongTerm/GraveyardSafety.h"
 #include "LongTerm/LlmJournal.h"
 #include "LongTerm/LlmPrompt.h"
 #include "LongTerm/LlmTelemetry.h"
+#include "MapMgr.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotMgr.h"
 #include "RandomPlayerbotMgr.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <cmath>
 #include <sstream>
 #include <variant>
 
@@ -430,6 +435,7 @@ void PlayerbotLongTermAI::UpdateAI(uint32 /*elapsed*/, bool /*minimal*/)
     LlmTelemetry::FlushPositionSamples(now);
 
     CheckMovementWatchdog(now);
+    CheckReviveGrace(now);
 
     // Deaths are a signal the model should see; sample the transition rather than
     // the state so a five-minute corpse run counts once.
@@ -438,6 +444,7 @@ void PlayerbotLongTermAI::UpdateAI(uint32 /*elapsed*/, bool /*minimal*/)
     {
         ++_deathsSinceLastDecision;
         LlmTelemetry::RecordEvent(bot, LlmTelemetry::EVENT_DIED);
+        NoteDeath(now);
 
         // Whatever it was doing is moot now. Mark the decision due; the dead-bot
         // guard below still holds it back until the bot is on its feet again, so
@@ -883,7 +890,12 @@ void PlayerbotLongTermAI::RetireDirective(std::string const& outcome)
     }
 
     std::string const full = outcome + "; " + SummariseDirectiveOutcome();
-    LlmJournal::SetLastOutcome(bot->GetGUID(), full);
+    // RecordOutcome rather than SetLastOutcome: the ring also holds REJECTED
+    // entries, and an outcome landing on one of those would erase the refusal
+    // the model is meant to see. (Not reachable for the callers above, since a
+    // rejection clears the directive; it is for the lethal-zone path, which can
+    // retire with no directive active.)
+    LlmJournal::RecordOutcome(bot->GetGUID(), full);
     _directive.completed = true;
     _directive.outcome = full;
 
@@ -977,4 +989,286 @@ void PlayerbotLongTermAI::Decide()
     } catch (const json::parse_error& e) {
         LOG_ERROR("playerbots", "JSON parse error: {}", e.what());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Lethal-zone recovery (PER-28)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    PlayerbotLongTermAI* HonestLongTermAI(Player* bot)
+    {
+        if (!bot || !sPlayerbotAIConfig.llmDirectiveEnabled || !sPlayerbotAIConfig.llmDirectiveNoCheating)
+            return nullptr;
+        PlayerbotLongTermAI* longTermAI = PlayerbotsMgr::instance().GetPlayerbotLongTermAI(bot);
+        if (!longTermAI || !longTermAI->IsDirectiveLayerActive())
+            return nullptr;
+        return longTermAI;
+    }
+}
+
+bool PlayerbotLongTermAI::RelocateGhostIfLethal(Player* bot, char const* path)
+{
+    PlayerbotLongTermAI* longTermAI = HonestLongTermAI(bot);
+    return longTermAI && longTermAI->RelocateGhost(path);
+}
+
+void PlayerbotLongTermAI::BeginReviveGrace(Player* bot)
+{
+    if (PlayerbotLongTermAI* longTermAI = HonestLongTermAI(bot))
+    {
+        longTermAI->_reviveGraceStartMs = getMSTime();
+        longTermAI->_reviveGraceChecked = false;
+    }
+}
+
+bool PlayerbotLongTermAI::IsInReviveGrace(Player* bot)
+{
+    // Cheapest exit first: this sits in the grind trigger of every bot.
+    if (!sPlayerbotAIConfig.llmDirectiveEnabled || !sPlayerbotAIConfig.llmDirectiveReviveGraceSeconds)
+        return false;
+    PlayerbotLongTermAI* longTermAI = HonestLongTermAI(bot);
+    if (!longTermAI || !longTermAI->_reviveGraceStartMs)
+        return false;
+    return getMSTimeDiff(longTermAI->_reviveGraceStartMs, getMSTime()) <
+           sPlayerbotAIConfig.llmDirectiveReviveGraceSeconds * 1000;
+}
+
+bool PlayerbotLongTermAI::IsZoneLethalFor(Player* bot, uint32 zoneId)
+{
+    if (!zoneId || !sPlayerbotAIConfig.llmDirectiveEnabled)
+        return false;
+    PlayerbotLongTermAI* longTermAI = HonestLongTermAI(bot);
+    return longTermAI && longTermAI->IsZoneLethal(zoneId, getMSTime());
+}
+
+uint32 PlayerbotLongTermAI::GetEscapeZoneFor(Player* bot)
+{
+    PlayerbotLongTermAI* longTermAI = HonestLongTermAI(bot);
+    if (!longTermAI)
+        return 0;
+
+    uint32 const now = getMSTime();
+    uint32 const escape = longTermAI->_escapeZoneId;
+    if (escape && escape != bot->GetZoneId() && !longTermAI->IsZoneLethal(escape, now))
+        return escape;
+
+    // Nothing remembered: the zone of the nearest safe graveyard outside this one
+    // is the same answer the ghost would get, and it is level-appropriate by
+    // construction.
+    std::string why;
+    GraveyardStruct const* graveyard = GraveyardSafety::FindSafeGraveyard(bot, WorldPosition(bot), true, why);
+    if (!graveyard)
+        return 0;
+    uint32 const zoneId = GraveyardSafety::AssessGraveyard(graveyard, bot->GetTeamId()).zoneId;
+    if (!zoneId || zoneId == bot->GetZoneId() || longTermAI->IsZoneLethal(zoneId, now))
+        return 0;
+    return zoneId;
+}
+
+bool PlayerbotLongTermAI::IsZoneLethal(uint32 zoneId, uint32 now)
+{
+    auto it = _lethalZoneMarkedMs.find(zoneId);
+    if (it == _lethalZoneMarkedMs.end())
+        return false;
+    if (getMSTimeDiff(it->second, now) >= sPlayerbotAIConfig.llmDirectiveLethalZoneBanMinutes * 60 * 1000)
+    {
+        _lethalZoneMarkedMs.erase(it);
+        return false;
+    }
+    return true;
+}
+
+void PlayerbotLongTermAI::NoteDeath(uint32 now)
+{
+    while (!_recentDeaths.empty() && getMSTimeDiff(_recentDeaths.front().ms, now) > DEATH_RING_SECONDS * 1000)
+        _recentDeaths.pop_front();
+
+    DeathRecord const here{now, bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY(), bot->GetZoneId()};
+    uint32 nearby = 1;
+    for (DeathRecord const& past : _recentDeaths)
+        if (past.mapId == here.mapId && std::hypot(past.x - here.x, past.y - here.y) <= DEATH_RING_RADIUS)
+            ++nearby;
+    _recentDeaths.push_back(here);
+
+    uint32 const threshold = sPlayerbotAIConfig.llmDirectiveLethalZoneDeaths;
+    if (!threshold || nearby < threshold || !here.zoneId || IsZoneLethal(here.zoneId, now))
+        return;
+
+    // Dying three times on the same spot is not bad luck, it is the wrong place.
+    // Write the zone off; the ring starts over so the next ban needs fresh deaths.
+    _lethalZoneMarkedMs[here.zoneId] = now;
+    _recentDeaths.clear();
+
+    std::string const zoneName = LlmZones::NameOf(here.zoneId);
+    LOG_WARN("playerbots", "[LlmDirective] {} (level {}) died {} times within {} yards in {} minutes; marking zone "
+                           "{} ({}) lethal for {} minutes",
+             bot->GetName(), uint32(bot->GetLevel()), nearby, uint32(DEATH_RING_RADIUS), DEATH_RING_SECONDS / 60,
+             here.zoneId, zoneName, sPlayerbotAIConfig.llmDirectiveLethalZoneBanMinutes);
+    LlmTelemetry::RecordEvent(bot, LlmTelemetry::EVENT_LETHAL_ZONE,
+                              "{\"zone\":" + std::to_string(here.zoneId) + ",\"deaths\":" + std::to_string(nearby) +
+                                  ",\"ban_minutes\":" +
+                                  std::to_string(sPlayerbotAIConfig.llmDirectiveLethalZoneBanMinutes) + "}");
+}
+
+bool PlayerbotLongTermAI::RelocateGhost(char const* path)
+{
+    // Only a released ghost can be moved between graveyards; a body that has not
+    // released yet is the dead engine's to release ("auto release" fires within
+    // seconds of death, long before any revive path runs).
+    if (!bot->isDead() || !bot->HasPlayerFlag(PLAYER_FLAGS_GHOST) || !bot->IsInWorld() ||
+        bot->IsBeingTeleported() || bot->InBattleground())
+        return false;
+
+    uint32 const now = getMSTime();
+    TeamId const team = bot->GetTeamId();
+    WorldPosition const here(bot);
+
+    // Assess where the ghost actually stands, not only the graveyard it was sent
+    // to: the dead engine may have walked it somewhere since.
+    GraveyardSafety::Assessment const at = GraveyardSafety::AssessPosition(here, team);
+    bool const lethalHere = GraveyardSafety::IsLethal(at, bot->GetLevel());
+    bool const zoneBanned = IsZoneLethal(bot->GetZoneId(), now);
+    if (!lethalHere && !zoneBanned)
+        return false;
+
+    GraveyardStruct const* current = GraveyardSafety::CurrentGraveyard(bot);
+    std::string why;
+    GraveyardStruct const* target = GraveyardSafety::FindSafeGraveyard(bot, here, zoneBanned, why);
+    if (!target)
+    {
+        LOG_WARN("playerbots", "[LlmDirective] {} ({}): ghost stands somewhere lethal (max hostile level {} vs "
+                               "bot level {}) but no safe graveyard was found; resurrecting in place",
+                 bot->GetName(), path, at.maxHostileLevel, uint32(bot->GetLevel()));
+        return false;
+    }
+
+    if (target->Map == bot->GetMapId() && bot->GetDistance2d(target->x, target->y) < 20.0f)
+        return false;
+
+    // Recorded before the move so the event carries the lethal position.
+    LlmTelemetry::RecordEvent(bot, LlmTelemetry::EVENT_LETHAL_GRAVEYARD,
+                              "{\"lethal_graveyard\":" + std::to_string(current ? current->ID : 0) +
+                                  ",\"moved_to\":" + std::to_string(target->ID) +
+                                  ",\"max_hostile_level\":" + std::to_string(at.maxHostileLevel) +
+                                  ",\"zone_banned\":" + (zoneBanned ? "true" : "false") + "}");
+
+    // The same teleport Player::RepopAtGraveyard performs on release. The only
+    // difference from the real game is which graveyard: a survivable one rather
+    // than the nearest. This is a ghost, not a live bot, so honest mode's ban on
+    // teleporting in place of walking does not apply.
+    bot->GetMotionMaster()->Clear();
+    bot->StopMoving();
+    bot->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TELEPORTED | AURA_INTERRUPT_FLAG_CHANGE_MAP);
+    if (!bot->TeleportTo(target->Map, target->x, target->y, target->z, 0.f))
+    {
+        LOG_WARN("playerbots", "[LlmDirective] {} ({}): teleport of ghost to graveyard {} refused", bot->GetName(),
+                 path, target->ID);
+        return false;
+    }
+
+    // Finish a same-map move now, so a caller that resurrects next does so at
+    // the new graveyard rather than the old one. A map change stays pending and
+    // the caller has to wait for it.
+    if (PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot))
+        if (bot->IsBeingTeleportedNear())
+            botAI->HandleTeleportAck();
+
+    _escapeGraveyardId = target->ID;
+    _escapeGraveyardName = target->name;
+    _escapeZoneId = GraveyardSafety::AssessGraveyard(target, team).zoneId;
+
+    std::string const zoneName = LlmZones::NameOf(at.zoneId);
+    LOG_WARN("playerbots", "[LlmDirective] {} (level {}, {}): ghost moved from graveyard {} ({}) to {} ({}) - {}; "
+                           "max hostile level {} within {} yards{}",
+             bot->GetName(), uint32(bot->GetLevel()), path, current ? current->ID : 0,
+             current ? current->name : "none", target->ID, target->name, why, at.maxHostileLevel,
+             sPlayerbotAIConfig.llmDirectiveLethalGraveyardRadius,
+             zoneBanned ? ", zone " + zoneName + " is written off" : "");
+
+    if (zoneBanned)
+    {
+        std::string const outcome = "zone " + zoneName + " is lethal at your level; left via " + target->name;
+        if (_directive.IsActive())
+            RetireDirective(outcome);
+        else
+            WriteObservation(outcome);
+    }
+
+    return true;
+}
+
+void PlayerbotLongTermAI::WriteObservation(std::string const& outcome)
+{
+    LlmJournal::RecordOutcome(bot->GetGUID(), outcome);
+}
+
+void PlayerbotLongTermAI::CheckReviveGrace(uint32 now)
+{
+    if (!_reviveGraceStartMs || _reviveGraceChecked || !bot->IsAlive())
+        return;
+    if (getMSTimeDiff(_reviveGraceStartMs, now) >= sPlayerbotAIConfig.llmDirectiveReviveGraceSeconds * 1000)
+    {
+        _reviveGraceStartMs = 0;
+        return;
+    }
+
+    _reviveGraceChecked = true;
+    if (bot->IsInCombat())
+        return;
+
+    PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(bot);
+    if (!botAI)
+        return;
+
+    // Anything hostile that could plausibly win, inside the distance the engine
+    // itself treats as "will react to me".
+    Unit* nearest = nullptr;
+    float nearestDist = 0.f;
+    int32 const minLevel = int32(bot->GetLevel()) - 3;
+    for (ObjectGuid const& guid : botAI->GetAiObjectContext()->GetValue<GuidVector>("nearest hostile npcs")->Get())
+    {
+        Unit* unit = botAI->GetUnit(guid);
+        if (!unit || !unit->IsAlive() || int32(unit->GetLevel()) <= minLevel)
+            continue;
+        float const dist = bot->GetDistance(unit);
+        if (dist > sPlayerbotAIConfig.reactDistance)
+            continue;
+        if (!nearest || dist < nearestDist)
+        {
+            nearest = unit;
+            nearestDist = dist;
+        }
+    }
+    if (!nearest)
+        return;
+
+    // Walk straight away from it, far enough to be out of react range with margin.
+    float dx = bot->GetPositionX() - nearest->GetPositionX();
+    float dy = bot->GetPositionY() - nearest->GetPositionY();
+    float const len = std::sqrt(dx * dx + dy * dy);
+    if (len < 0.1f)
+    {
+        dx = 1.f;
+        dy = 0.f;
+    }
+    else
+    {
+        dx /= len;
+        dy /= len;
+    }
+    float const away = sPlayerbotAIConfig.reactDistance + 20.0f;
+    float const x = bot->GetPositionX() + dx * away;
+    float const y = bot->GetPositionY() + dy * away;
+    float const z = bot->GetMap()->GetHeight(x, y, MAX_HEIGHT);
+    if (z <= INVALID_HEIGHT)
+        return;
+
+    // GO_GRIND is the engine's own "walk far to this point" state; on arrival it
+    // degrades to wandering, and the grace window keeps that from turning into a
+    // fight. Nothing here outlives the walk.
+    botAI->rpgInfo.ChangeToGoGrind(WorldPosition(bot->GetMapId(), x, y, z));
+    LOG_INFO("playerbots", "[LlmDirective] {} (level {}) revived {:.0f} yards from {} (level {}); walking away first",
+             bot->GetName(), uint32(bot->GetLevel()), nearestDist, nearest->GetName(), uint32(nearest->GetLevel()));
 }

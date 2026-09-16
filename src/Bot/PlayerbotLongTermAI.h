@@ -6,6 +6,9 @@
 #include "LongTerm/LlmClient.h"
 #include "LongTerm/LlmDirective.h"
 #include "LongTerm/LlmVendor.h"
+#include <deque>
+#include <string>
+#include <unordered_map>
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
@@ -96,6 +99,33 @@ public:
     bool GetVendorPlan(LlmVendorPlan& out) const;
     void CompleteVendorHandoff(std::string const& outcome);
 
+    // --- lethal-zone recovery (PER-28) ---------------------------------------
+    //
+    // Honest mode removed every teleport, including the post-death relocation
+    // that is the only thing upstream has for getting a random bot out of a
+    // graveyard it cannot survive at. A ghost choosing its graveyard is a real
+    // player's move, so that is the replacement. All static and null-safe: the
+    // callers are the classical revive paths, which know nothing about this
+    // layer beyond IsHonestBot.
+
+    // Before an honest bot is resurrected: if where its ghost stands is lethal
+    // for it (or its zone has been written off), move the ghost to a safe
+    // graveyard first. `path` names the caller for the log. True if it moved.
+    static bool RelocateGhostIfLethal(Player* bot, char const* path);
+
+    // Right after any honest resurrect. For ReviveGraceSeconds the bot does not
+    // pick fights, and walks away from anything hostile that outlevels it.
+    static void BeginReviveGrace(Player* bot);
+    static bool IsInReviveGrace(Player* bot);
+
+    // Escalation memory: a zone this bot has died in too often, too close
+    // together, and must stay out of for a while.
+    static bool IsZoneLethalFor(Player* bot, uint32 zoneId);
+
+    // The zone the bot's ghost last escaped to, so the legal-zone list can offer
+    // a real way out when the current zone is lethal. 0 when none.
+    static uint32 GetEscapeZoneFor(Player* bot);
+
 protected:
     Player* bot;
     FunctionToolRegistry functionToolRegistry;
@@ -178,6 +208,35 @@ private:
     float _watchdogX{0.f}, _watchdogY{0.f}, _watchdogZ{0.f};
     uint32 _stationarySinceMs{0};
     uint32 _lastWatchdogResetMs{0};
+
+    // --- lethal-zone recovery state -------------------------------------------
+    //
+    // Deliberately not built on the watchdog timer: that timer is reset whenever
+    // the bot is dead or in combat, so a bot dying every minute never accumulates
+    // anything there. Deaths are the signal.
+    struct DeathRecord
+    {
+        uint32 ms;
+        uint32 mapId;
+        float x, y;
+        uint32 zoneId;
+    };
+    static constexpr uint32 DEATH_RING_SECONDS = 1800;
+    static constexpr float DEATH_RING_RADIUS = 300.0f;
+
+    void NoteDeath(uint32 now);
+    bool RelocateGhost(char const* path);
+    void CheckReviveGrace(uint32 now);
+    bool IsZoneLethal(uint32 zoneId, uint32 now);
+    void WriteObservation(std::string const& outcome);
+
+    std::deque<DeathRecord> _recentDeaths;
+    std::unordered_map<uint32, uint32> _lethalZoneMarkedMs;  // zone id -> when it was written off
+    uint32 _reviveGraceStartMs{0};
+    bool _reviveGraceChecked{false};
+    uint32 _escapeZoneId{0};
+    uint32 _escapeGraveyardId{0};
+    std::string _escapeGraveyardName;
 };
 
 #endif

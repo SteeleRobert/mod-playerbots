@@ -1564,6 +1564,17 @@ void RandomPlayerbotMgr::Revive(Player* player)
 {
     uint32 bot = player->GetGUID().GetCounter();
 
+    // An honest bot gets no RandomTeleport below, so whatever graveyard its ghost
+    // stands at is where it will live. If that graveyard would kill it, the ghost
+    // moves to one that will not (PER-28). A same-map move completes inside the
+    // call; a map change is left to finish and the revive retried shortly.
+    if (PlayerbotLongTermAI::IsHonestBot(player) &&
+        PlayerbotLongTermAI::RelocateGhostIfLethal(player, "timed revive") && player->IsBeingTeleported())
+    {
+        SetEventValue(bot, "revive", 1, 5);
+        return;
+    }
+
     // LOG_INFO("playerbots", "Bot {} revived", player->GetName().c_str());
     SetEventValue(bot, "dead", 0, 0);
     SetEventValue(bot, "revive", 0, 0);
@@ -2079,9 +2090,24 @@ void RandomPlayerbotMgr::Refresh(Player* bot)
 
     if (bot->isDead())
     {
+        // Refresh is reached from the periodic teleport-and-refresh paths too,
+        // not only from Revive, so the honest ghost's graveyard check lives here
+        // as well. A move still in flight means the position is not final yet;
+        // resurrecting now would stand the bot up at the old, lethal spot.
+        bool const honestDead = PlayerbotLongTermAI::IsHonestBot(bot);
+        if (honestDead)
+        {
+            PlayerbotLongTermAI::RelocateGhostIfLethal(bot, "refresh");
+            if (bot->IsBeingTeleported())
+                return;
+        }
+
         bot->ResurrectPlayer(1.0f);
         bot->SpawnCorpseBones();
         botAI->ResetStrategies(false);
+
+        if (honestDead)
+            PlayerbotLongTermAI::BeginReviveGrace(bot);
     }
 
     // if (sPlayerbotAIConfig.disableRandomLevels)
