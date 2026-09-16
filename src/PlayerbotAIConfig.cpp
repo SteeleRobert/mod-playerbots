@@ -770,6 +770,21 @@ bool PlayerbotAIConfig::Initialize()
     // teleporting instead of walking, free repair/heal/money/restock. An LLM bot
     // that teleports out of a bad decision is not demonstrating anything.
     llmDirectiveNoCheating = sConfigMgr->GetOption<bool>("AiPlayerbot.LlmDirective.NoCheating", true);
+    // Honest bots cannot be teleported out of a hostile graveyard, so the ghost
+    // has to choose a survivable one. "Survivable" is a level margin against the
+    // hostile spawns around the graveyard; see GraveyardSafety.
+    llmDirectiveLethalGraveyardLevelDelta =
+        sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.LethalGraveyardLevelDelta", 5);
+    llmDirectiveLethalGraveyardRadius = std::clamp<uint32>(
+        sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.LethalGraveyardRadius", 60), 10, 300);
+    llmDirectiveReviveGraceSeconds =
+        std::min<uint32>(600, sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.ReviveGraceSeconds", 60));
+    // Deaths close together (300 yards, 30 minutes) before the bot writes the
+    // whole zone off for LethalZoneBanMinutes. 0 disables the escalation.
+    llmDirectiveLethalZoneDeaths =
+        sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.LethalZoneDeaths", 3);
+    llmDirectiveLethalZoneBanMinutes =
+        sConfigMgr->GetOption<uint32>("AiPlayerbot.LlmDirective.LethalZoneBanMinutes", 60);
     // Ask again as soon as a directive is actually finished, rather than sitting
     // idle until the interval expires. Finishing is the most informative moment
     // to re-decide, and the model gets to see the outcome while it still matters.

@@ -47,6 +47,10 @@ namespace LlmTelemetry
     constexpr char const* EVENT_QUEST_DONE = "quest_done";
     constexpr char const* EVENT_LEVELED_UP = "leveled_up";
     constexpr char const* EVENT_STUCK      = "stuck";
+    // Honest-bot lethal-zone recovery (PER-28). The dashboard tallies unknown
+    // names, so these need no schema change.
+    constexpr char const* EVENT_LETHAL_GRAVEYARD = "lethal_graveyard";
+    constexpr char const* EVENT_LETHAL_ZONE      = "lethal_zone";
 
     // One decision -> one journal row. `command` is the directive verb, so the
     // dashboard's per-command breakdown shows quest/grind/travel/turnin/vendor.

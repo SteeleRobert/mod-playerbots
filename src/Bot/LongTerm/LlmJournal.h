@@ -80,6 +80,10 @@ namespace LlmJournal
 
     void PushHistory(ObjectGuid guid, LlmHistoryEntry entry);
     void SetLastOutcome(ObjectGuid guid, std::string const& outcome);
+    // Like SetLastOutcome, but never overwrites a REJECTED entry (those carry the
+    // refusal the model must not repeat) and never disappears when the ring is
+    // empty: in both cases the outcome is appended as its own entry instead.
+    void RecordOutcome(ObjectGuid guid, std::string const& outcome);
     std::vector<LlmHistoryEntry> RecentHistory(ObjectGuid guid, uint32 count);
     void Forget(ObjectGuid guid);
 }

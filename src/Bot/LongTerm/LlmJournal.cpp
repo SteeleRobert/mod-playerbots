@@ -115,6 +115,24 @@ namespace LlmJournal
         it->second.back().outcome = outcome;
     }
 
+    void RecordOutcome(ObjectGuid guid, std::string const& outcome)
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        auto& dq = g_history[guid.GetRawValue()];
+        if (!dq.empty() && dq.back().directive.rfind("REJECTED", 0) != 0)
+        {
+            dq.back().outcome = outcome;
+            return;
+        }
+
+        LlmHistoryEntry entry;
+        entry.directive = "(no directive)";
+        entry.outcome = outcome;
+        dq.push_back(std::move(entry));
+        while (dq.size() > HISTORY_CAP)
+            dq.pop_front();
+    }
+
     std::vector<LlmHistoryEntry> RecentHistory(ObjectGuid guid, uint32 count)
     {
         std::vector<LlmHistoryEntry> out;

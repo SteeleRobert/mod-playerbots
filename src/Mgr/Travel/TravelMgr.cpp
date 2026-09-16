@@ -4439,6 +4439,16 @@ std::vector<uint32> TravelMgr::GetCapitalZones(TeamId team) const
     return zones;
 }
 
+bool TravelMgr::GetZoneLevelBracket(uint32 zoneId, uint32& low, uint32& high) const
+{
+    auto it = zone2LevelBracket.find(zoneId);
+    if (it == zone2LevelBracket.end())
+        return false;
+    low = it->second.low;
+    high = it->second.high;
+    return true;
+}
+
 std::vector<uint32> TravelMgr::GetFlightPathToZone(Player* bot, uint32 zoneId) const
 {
     std::vector<uint32> path;
