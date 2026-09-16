@@ -926,7 +926,14 @@ bool NewRpgBaseAction::GetQuestPOIPosAndObjectiveIdx(uint32 questId, std::vector
                 dy = anchor.y;
             }
 
-            if (!crossZone && bot->GetZoneId() != bot->GetMap()->GetZoneId(bot->GetPhaseMask(), dx, dy, dz))
+            uint32 const poiZone = bot->GetMap()->GetZoneId(bot->GetPhaseMask(), dx, dy, dz);
+            if (!crossZone && bot->GetZoneId() != poiZone)
+                continue;
+
+            // A cross-zone turn-in never leads into a zone the bot has written off
+            // for dying in it too often (PER-28). The ender is still there; the
+            // bot will get another chance once the ban lifts or it outlevels it.
+            if (crossZone && PlayerbotLongTermAI::IsZoneLethalFor(bot, poiZone))
                 continue;
 
             poiInfo.push_back({{dx, dy}, qPoi.ObjectiveIndex, dz, anchored});
