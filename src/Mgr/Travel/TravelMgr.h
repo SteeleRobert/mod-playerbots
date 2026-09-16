@@ -892,6 +892,10 @@ public:
     // one, which leaves the strategic layer unable to express "go back to town".
     std::vector<uint32> GetCapitalZones(TeamId team) const;
 
+    // The levelling bracket of a zone, or false for zones that have none
+    // (capitals, instances, unlisted areas).
+    bool GetZoneLevelBracket(uint32 zoneId, uint32& low, uint32& high) const;
+
     // Taxi path from the bot's nearest flight master into `zoneId`, or empty when
     // there is no usable route. The zone-targeted counterpart of
     // GetOptimalFlightDestinations, which picks a destination at random.

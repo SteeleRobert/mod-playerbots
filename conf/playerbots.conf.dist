@@ -1555,6 +1555,39 @@ AiPlayerbot.LlmDirective.PositionRetentionDays = 7
 # Default: 1 (enabled)
 AiPlayerbot.LlmDirective.NoCheating = 1
 
+# Lethal-zone recovery for honest bots. With NoCheating on, nothing relocates a
+# dead random bot, so it stands up at whatever graveyard the core released it
+# to. Measured on olab1: eleven level 10-14 bots resurrecting at Ravenhill in
+# Duskwood next to level 24 undead, dying again within the minute, for nine
+# days. A real player's ghost can run to any graveyard and every spirit healer
+# resurrects, so the honest fix is graveyard choice: before an honest bot is
+# resurrected, the graveyard it stands at is assessed from spawn data and, when
+# it is lethal for the bot's level, the ghost is moved to the nearest safe one
+# (the same teleport the game's own release uses) and resurrected there.
+#
+# A graveyard is lethal when a hostile spawn within LethalGraveyardRadius yards
+# of it outlevels the bot by LethalGraveyardLevelDelta or more.
+# Defaults: 5 levels, 60 yards
+AiPlayerbot.LlmDirective.LethalGraveyardLevelDelta = 5
+AiPlayerbot.LlmDirective.LethalGraveyardRadius = 60
+
+# Breathing room after any honest resurrect: for this many seconds the bot does
+# not pick fights on its own, and if something hostile above its level is within
+# react distance it walks away from it first. 0 disables.
+# Default: 60
+AiPlayerbot.LlmDirective.ReviveGraceSeconds = 60
+
+# Escalation memory. When a bot has died LethalZoneDeaths times within 300 yards
+# of each other inside 30 minutes, it writes the zone off for
+# LethalZoneBanMinutes: the zone is withheld from the strategic layer's legal
+# list, cross-zone turn-ins into it are refused, the next resurrect leaves the
+# zone, and the running directive is retired with the reason so the model
+# hears "this zone is lethal at your level" instead of "you died". Held in
+# memory only; a restart forgets it. 0 deaths disables the escalation.
+# Defaults: 3 deaths, 60 minutes
+AiPlayerbot.LlmDirective.LethalZoneDeaths = 3
+AiPlayerbot.LlmDirective.LethalZoneBanMinutes = 60
+
 # Ask the model again as soon as a directive is actually FINISHED, instead of
 # waiting out IntervalSeconds. Completion is the most informative moment to
 # re-decide - the bot has just turned a quest in, or arrived somewhere - and the

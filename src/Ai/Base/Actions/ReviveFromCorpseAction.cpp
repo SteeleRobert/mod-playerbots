@@ -9,7 +9,9 @@
 #include "Event.h"
 #include "FleeManager.h"
 #include "GameGraveyard.h"
+#include "LongTerm/GraveyardSafety.h"
 #include "MapMgr.h"
+#include "PlayerbotLongTermAI.h"
 #include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
 #include "RandomPlayerbotMgr.h"
@@ -59,6 +61,13 @@ bool ReviveFromCorpseAction::Execute(Event event)
             return botAI->DoSpecificAction("spirit healer");
     }
 
+    // An honest bot does not reclaim a corpse lying among things that outlevel it
+    // by a wide margin: standing up there is another death, and there is no
+    // teleport afterwards to undo it. The timed revive relocates its ghost to a
+    // survivable graveyard instead (PER-28).
+    if (PlayerbotLongTermAI::IsHonestBot(bot) && GraveyardSafety::IsCorpseLethal(corpse, bot))
+        return false;
+
     LOG_DEBUG("playerbots", "Bot {} {}:{} <{}> revives at body", bot->GetGUID().ToString().c_str(),
               bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str());
 
@@ -104,6 +113,14 @@ bool FindCorpseAction::Execute(Event /*event*/)
             return true;
         }
     }
+
+    // No corpse run for an honest bot whose corpse lies somewhere lethal for it:
+    // the ghost waits at the graveyard for the timed revive, which moves it to a
+    // survivable graveyard before standing it up (PER-28). Walking to the corpse
+    // - or, for an inactive bot, being teleported to it below - would only put
+    // the bot back among the things that killed it.
+    if (PlayerbotLongTermAI::IsHonestBot(bot) && GraveyardSafety::IsCorpseLethal(corpse, bot))
+        return false;
 
     WorldPosition botPos(bot);
     WorldPosition corpsePos(corpse);
@@ -306,6 +323,13 @@ bool SpiritHealerAction::Execute(Event /*event*/)
     GraveyardStruct const* ClosestGrave =
         GetGrave(dCount > 10 || deadTime > 15 * MINUTE || AI_VALUE(uint8, "durability") < 10);
 
+    // An honest ghost about to take the spirit healer first makes sure the
+    // graveyard is one it can survive at; if not, it moves to one that is and
+    // takes the healer there on the next pass (PER-28).
+    bool const honest = PlayerbotLongTermAI::IsHonestBot(bot);
+    if (honest && PlayerbotLongTermAI::RelocateGhostIfLethal(bot, "spirit healer"))
+        return true;
+
     if (bot->GetDistance2d(ClosestGrave->x, ClosestGrave->y) < sPlayerbotAIConfig.sightDistance)
     {
         GuidVector npcs = AI_VALUE(GuidVector, "nearest npcs");
@@ -322,6 +346,8 @@ bool SpiritHealerAction::Execute(Event /*event*/)
                 context->GetValue<Unit*>("current target")->Set(nullptr);
                 bot->SetTarget();
                 botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault("hello", "Hello", {}));
+                if (honest)
+                    PlayerbotLongTermAI::BeginReviveGrace(bot);
 
                 if (dCount > 20)
                     context->GetValue<uint32>("death count")->Set(0);

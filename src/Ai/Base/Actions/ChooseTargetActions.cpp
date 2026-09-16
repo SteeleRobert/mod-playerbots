@@ -9,6 +9,7 @@
 #include "Event.h"
 #include "LootObjectStack.h"
 #include "NewRpgStrategy.h"
+#include "PlayerbotLongTermAI.h"
 #include "Playerbots.h"
 #include "PossibleRpgTargetsValue.h"
 #include "PvpTriggers.h"
@@ -113,6 +114,12 @@ bool AttackAnythingAction::isUseful()
         return false;
 
     if (bot->IsInCombat())
+        return false;
+
+    // Just resurrected: an honest bot gets a moment to walk clear before it
+    // starts picking fights again (PER-28). Being attacked still counts as
+    // combat and is handled as such; this only withholds the bot's own pull.
+    if (PlayerbotLongTermAI::IsInReviveGrace(bot))
         return false;
 
     Unit* target = GetTarget();

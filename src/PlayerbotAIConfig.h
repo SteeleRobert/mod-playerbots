@@ -412,6 +412,14 @@ public:
     uint32 llmDirectivePositionSampleSeconds;
     uint32 llmDirectivePositionRetentionDays;
     bool llmDirectiveNoCheating;
+    // Lethal-zone recovery for honest bots (PER-28). A graveyard is lethal when a
+    // hostile spawn within LethalGraveyardRadius yards outlevels the bot by
+    // LethalGraveyardLevelDelta or more.
+    uint32 llmDirectiveLethalGraveyardLevelDelta;
+    uint32 llmDirectiveLethalGraveyardRadius;
+    uint32 llmDirectiveReviveGraceSeconds;
+    uint32 llmDirectiveLethalZoneDeaths;
+    uint32 llmDirectiveLethalZoneBanMinutes;
     bool llmDirectiveReactToCompletion;
     bool llmDirectiveReactToInterrupts;
     uint32 llmDirectiveMinIntervalSeconds;

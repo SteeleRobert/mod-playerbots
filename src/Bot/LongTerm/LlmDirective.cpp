@@ -7,6 +7,9 @@
 #include "LlmDirective.h"
 
 #include "DBCStores.h"
+#include "Log.h"
+#include "MapMgr.h"
+#include "PlayerbotLongTermAI.h"
 #include "Player.h"
 #include "TravelMgr.h"
 
@@ -242,6 +245,10 @@ namespace LlmZones
         {
             if (!zoneId || result.size() >= MAX_ZONES || !seen.insert(zoneId).second)
                 return;
+            // A zone the bot has written off (PER-28) is never offered, so the
+            // model cannot send it back in for the length of the ban.
+            if (PlayerbotLongTermAI::IsZoneLethalFor(bot, zoneId))
+                return;
             std::string name = NameOf(zoneId);
             if (name.empty())
                 return;
@@ -250,7 +257,17 @@ namespace LlmZones
 
         // The zone the bot is standing in is always legal: "stay put" has to be
         // expressible, otherwise every reply is a relocation.
-        push(bot->GetZoneId());
+        //
+        // Unless the bot has just written this zone off for dying in it too often.
+        // Then "stay put" is the one answer that must NOT be expressible, and the
+        // first entry is instead the nearest zone it can survive in - the one its
+        // ghost escaped to - so the list leads with the way out.
+        uint32 const currentZone = bot->GetZoneId();
+        bool const currentLethal = PlayerbotLongTermAI::IsZoneLethalFor(bot, currentZone);
+        if (!currentLethal)
+            push(currentZone);
+        else
+            push(PlayerbotLongTermAI::GetEscapeZoneFor(bot));
 
         // Capitals next, and never level-gated. They are not levelling zones, so
         // they are absent from zone2LevelBracket and GetLevelAppropriateZones can
@@ -278,6 +295,21 @@ namespace LlmZones
 
         for (uint32 zoneId : sTravelMgr.GetLevelAppropriateZones(bot))
             push(zoneId);
+
+        // The prompt withholds "travel" whenever the list has fewer than two
+        // entries (LlmPrompt, canTravel). A bot whose current zone is lethal must
+        // still be able to say it is leaving, so make sure there is a second
+        // entry: the zone it is bound to is always somewhere it once stood alive.
+        if (currentLethal && result.size() < 2)
+        {
+            if (bot->m_homebindMapId == botMapId)
+                push(sMapMgr->GetZoneId(PHASEMASK_NORMAL, bot->m_homebindMapId, bot->m_homebindX, bot->m_homebindY,
+                                        bot->m_homebindZ));
+            if (result.size() < 2)
+                LOG_WARN("playerbots", "[LlmDirective] {} is in a zone it wrote off but only {} legal zone(s) could "
+                                       "be offered; the model cannot be told to leave",
+                         bot->GetName(), result.size());
+        }
 
         return result;
     }
